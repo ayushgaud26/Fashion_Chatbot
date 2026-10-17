@@ -1,0 +1,13 @@
+.env
+data/chat_history.sqlite3*
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+chroma_db/*
+!chroma_db/.gitkeep
+.env
+.venv/
+__pycache__/
+*.sqlite3
+.streamlit/secrets.toml

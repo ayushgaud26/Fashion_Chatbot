@@ -1,0 +1,31 @@
+{
+	"folders": [
+		{
+			"path": "../.pytest_cache"
+		},
+		{
+			"path": "../.pytest-tmp"
+		},
+		{
+			"path": "../.venv"
+		},
+		{
+			"path": "../chroma_db"
+		},
+		{
+			"path": "../data"
+		},
+		{
+			"path": "../docs"
+		},
+		{
+			"path": "../scripts"
+		},
+		{
+			"path": "."
+		},
+		{
+			"path": "../tests"
+		}
+	]
+}

@@ -1,0 +1,40 @@
+[
+  {
+    "id": 900000001,
+    "productDisplayName": "PUMA Skyrocket Lite Running Shoes - Black",
+    "brand": "PUMA",
+    "gender": "Men",
+    "masterCategory": "Footwear",
+    "subCategory": "Shoes",
+    "articleType": "Running Shoes",
+    "baseColour": "Black",
+    "usage": "Road running",
+    "price": 3149,
+    "originalPrice": 4999,
+    "currency": "INR",
+    "productUrl": "https://in.puma.com/in/en/pd/skyrocket-lite-running-shoes/379437",
+    "retailer": "PUMA India",
+    "priceCheckedAt": "2026-10-17",
+    "material": "Textile and synthetic upper; synthetic midsole; rubber outsole",
+    "comparisonFacts": "PROFOAM lightweight EVA cushioning; SOFTFOAM+ sockliner; 294.1 g (UK 8); 10-day qualifying returns"
+  },
+  {
+    "id": 900000002,
+    "productDisplayName": "Reebok Zig Dynamica 3 - Men Black Running Shoes",
+    "brand": "Reebok",
+    "gender": "Men",
+    "masterCategory": "Footwear",
+    "subCategory": "Shoes",
+    "articleType": "Running Shoes",
+    "baseColour": "Black",
+    "usage": "Road running",
+    "price": 5599,
+    "originalPrice": 7999,
+    "currency": "INR",
+    "productUrl": "https://reebok.abfrl.in/p/mens-reebok-running-zig-dynamica-3-shoes-800738.html",
+    "retailer": "Reebok India",
+    "priceCheckedAt": "2026-10-17",
+    "material": "Synthetic and textile upper; rubber outsole",
+    "comparisonFacts": "Zig Energy Web outsole; responsive cushioning; heel padding; recycled textile upper materials; 15-day returns"
+  }
+]

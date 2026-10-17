@@ -1,0 +1,75 @@
+{
+  "builder_name": "parquet",
+  "citation": "",
+  "config_name": "default",
+  "dataset_name": "fashion-product-images-small",
+  "dataset_size": 568896653,
+  "description": "",
+  "download_size": 271496441,
+  "features": {
+    "id": {
+      "dtype": "int64",
+      "_type": "Value"
+    },
+    "gender": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "masterCategory": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "subCategory": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "articleType": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "baseColour": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "season": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "year": {
+      "dtype": "float64",
+      "_type": "Value"
+    },
+    "usage": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "productDisplayName": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "image": {
+      "_type": "Image"
+    }
+  },
+  "homepage": "",
+  "license": "",
+  "size_in_bytes": 840393094,
+  "splits": {
+    "train": {
+      "name": "train",
+      "num_bytes": 568896653,
+      "num_examples": 44072,
+      "shard_lengths": [
+        42036,
+        2036
+      ],
+      "dataset_name": "fashion-product-images-small"
+    }
+  },
+  "version": {
+    "version_str": "0.0.0",
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+  }
+}
