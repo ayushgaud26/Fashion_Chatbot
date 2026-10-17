@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Fashion Product RAG Chatbot
 
 A Retrieval-Augmented Generation (RAG) chatbot for **Myntra product discovery**, using the supplied Myntra CSV
@@ -87,3 +88,6 @@ cards render; the app does not download them during indexing. Set the dataset pa
 - Synonyms (`sportswear`, `clothing`, `sneakers`, `pants`, …) are a small documented table in `src/filters.py`; unknown slang is not understood by the structured layer.
 - Navy Blue is a separate colour from Blue (exact dataset values); "blue jeans" does not include Navy Blue.
 - No image upload / visual recognition is implemented; images are only displayed.
+=======
+# Fashion_Chatbot
+>>>>>>> 54018e9188d815256216d46fa45ecbca2e24621e
