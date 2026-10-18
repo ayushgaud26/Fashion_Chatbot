@@ -1,93 +1,83 @@
-<<<<<<< HEAD
 # Fashion Product RAG Chatbot
 
-A Retrieval-Augmented Generation (RAG) chatbot for **Myntra product discovery**, using the supplied Myntra CSV
-as its primary catalogue. It supports product lookup, structured filters, semantic search, comparison, and cards
-with dataset images, prices, discounts, ratings, sizes, materials, and Myntra links.
+A Streamlit shopping assistant for searching a Myntra product catalogue. It combines structured filters and semantic retrieval, then presents matching catalogue records as product cards with images, prices, discounts, ratings, sizes, and links.
 
-## Dataset
-The configured file is `data/myntra/myntra-dataset-sample-main/Myntra products .csv` (the supplied ZIP sample).
-It contains 1,000 rows and 24 columns. The loader maps product IDs, names, brands, categories, sizes, materials and
-specifications, prices, discounts, ratings/review counts, image URLs, and product URLs into the existing catalog
-pipeline while retaining original source fields in the normalized export. Missing values remain missing; stock is
-not inferred from delivery-option text. Prices/ratings are the dataset snapshot, not live Myntra values.
+## Catalogue
 
-Set `DATASET_PATH` in `.env` to select another Myntra CSV. Arrow input remains supported for the previous catalog.
-Myntra uses the separate `fashion_products_myntra` Chroma collection, so its IDs/vectors do not mix with old data.
-The old retail demo catalog is excluded when a CSV is selected.
+The default dataset is the 1,000-row, 24-column Myntra sample at `data/myntra/myntra-dataset-sample-main/Myntra products .csv`. The loader maps product IDs, names, brands, categories, sizes, materials, prices, discounts, ratings, image URLs, and product URLs into the catalogue while preserving source fields. Missing values stay missing, and stock is never inferred from delivery text.
 
-## Install on Windows (PowerShell)
+Prices, ratings, discounts, and product links come from a dataset snapshot; they are not live Myntra values. The sample does not include stock status or a standalone colour column. Some fields are missing for some products.
+
+Set `DATASET_PATH` in `.env` to use a different Myntra CSV. Arrow input is also supported for the previous catalogue. Myntra uses a separate Chroma collection, `fashion_products_myntra`.
+
+## Install (Windows PowerShell)
+
 ```powershell
-cd fashion-rag-chatbot
 py -3.12 -m venv .venv
-.venv\Scripts\Activate.ps1          # if blocked: Set-ExecutionPolicy -Scope Process RemoteSigned
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-copy .env.example .env              # then edit .env and add GEMINI_API_KEY or OPENAI_API_KEY
+Copy-Item .env.example .env
+# Add a Gemini or OpenAI API key to .env
 ```
-macOS/Linux: `python3 -m venv .venv && source .venv/bin/activate`.
 
-## Workflow
+On macOS or Linux, create and activate a virtual environment with `python3 -m venv .venv` and `source .venv/bin/activate`.
+
+## Run
+
 ```powershell
-python scripts/validate_dataset.py     # inspect schema, counts, missing values, and URL schemes
-python scripts/build_index.py          # load → clean → data/products.json → embed → ChromaDB (idempotent)
-python scripts/build_index.py --rebuild   # drop and rebuild from scratch
-python scripts/build_index.py --limit 500 # development subset
-streamlit run app.py                   # open http://localhost:8501
-python -m pytest -q                    # tests (no paid API calls, no model download needed)
-python scripts/run_demo_queries.py     # runs the 10 demo queries, verifies against raw data → docs/demo_results.md
+python scripts/validate_dataset.py
+python scripts/build_index.py
+streamlit run app.py
 ```
-The app also builds the index automatically on first start if it is missing.
 
-## Configuration (`.env`)
-| Variable | Default | Meaning |
-|---|---|---|
-| `LLM_PROVIDER` | `auto` | `gemini`, `openai`, or `auto` (uses OpenAI when its key is set, otherwise Gemini) |
-| `GEMINI_API_KEY` / `GEMINI_MODEL` | – / `gemini-3.5-flash-lite` | Gemini API key and model; Gemini offers a free tier with model-specific limits |
-| `OPENAI_API_KEY` / `OPENAI_MODEL` | – / `gpt-4o-mini` | Optional OpenAI API key and model |
-| `LLM_TEMPERATURE` | `0.1` | LLM response temperature |
-| `EMBEDDING_BACKEND` | `auto` | `auto` tries sentence-transformers then falls back to an offline hashing embedder; `sentence-transformers` is strict; `hashing` is offline/test only |
-| `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Embedding model |
-| `DATASET_PATH`, `CHROMA_DIR`, `COLLECTION_NAME`, `RETAIL_CATALOG_PATH` | see `.env.example` | Locations |
-| `BATCH_SIZE`, `DEV_SUBSET_SIZE`, `MAX_RESULTS`, `SEMANTIC_TOP_K`, `SEMANTIC_MAX_DISTANCE` | `256`, `0`, `50`, `10`, `0.8` | Indexing and retrieval limits |
+The app builds the index on first start if it is missing. To rebuild it from scratch, run `python scripts/build_index.py --rebuild`. For a smaller development index, use `python scripts/build_index.py --limit 500`.
 
-If the embedder changes, the collection is rebuilt automatically (vectors from different models must not be mixed).
+Run the test suite with `python -m pytest -q`. The demo query report can be regenerated with `python scripts/run_demo_queries.py`.
 
-## Optional retail demo catalogue and chat memory
-`data/retail_products.json` is a small India-market demo catalogue, separate from the historical fashion dataset.
-Each retail record includes a retailer URL, INR price, original listed price, and `priceCheckedAt`; refresh values
-from the retailer before presenting them as current. Product details are taken from the linked retailer pages.
-Add or edit records in this JSON file using the same fields. The app validates IDs, prices and HTTPS product URLs.
-It is enabled only with the Arrow source; selecting the Myntra CSV keeps the catalogue Myntra-only.
+## Configuration
 
-Chat messages and retrieved product context are stored locally in `data/chat_history.sqlite3`, keyed by a random
-conversation ID in the app URL. The app sends up to the latest 20 messages to the LLM as conversational context.
-Use **Reset chat** to delete the current conversation from the local database. The database is ignored by Git.
+| Variable | Purpose |
+|---|---|
+| `LLM_PROVIDER` | `gemini`, `openai`, or `auto` |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | Gemini credentials and model |
+| `OPENAI_API_KEY`, `OPENAI_MODEL` | Optional OpenAI credentials and model |
+| `LLM_TEMPERATURE` | Response temperature |
+| `EMBEDDING_BACKEND` | `auto`, `sentence-transformers`, or offline `hashing` fallback |
+| `EMBEDDING_MODEL` | SentenceTransformer model name |
+| `DATASET_PATH`, `CHROMA_DIR`, `COLLECTION_NAME`, `RETAIL_CATALOG_PATH` | Dataset and index locations |
+| `BATCH_SIZE`, `DEV_SUBSET_SIZE`, `MAX_RESULTS`, `SEMANTIC_TOP_K`, `SEMANTIC_MAX_DISTANCE` | Indexing and retrieval limits |
 
-## Example queries
-`Find men jeans under 1500` · `Find white women tshirts` · `Find cotton shirts` ·
-`shirts rating above 4.0` · `shirts discount above 40%` · `show size M` ·
-`Which one is cheaper?` after retrieving products · a Myntra product ID or exact name.
+Copy `.env.example` to `.env` and keep API keys private. If the embedding model changes, rebuild the collection so vectors from different models are not mixed.
 
-## Myntra CSV
-The supplied ZIP is extracted under `data/myntra/`. CSV images are loaded from their source URLs when product
-cards render; the app does not download them during indexing. Set the dataset path in `.env` if you move the CSV.
+An optional small India-market retail catalogue lives at `data/retail_products.json`. Its prices should be refreshed from the retailer before being presented as current. It is enabled with the Arrow source; selecting the Myntra CSV keeps the catalogue Myntra-only.
+
+## Example searches
+
+- `Find men jeans under 1500`
+- `Find white women tshirts`
+- `Find cotton shirts`
+- `shirts rating above 4.0`
+- `shirts discount above 40%`
+- `show size M`
+- Ask “Which one is cheaper?” after a product search
+- Search by Myntra product ID or exact product name
+
+## Chat history
+
+Chat messages and retrieved product context are stored in `data/chat_history.sqlite3`, keyed by a random conversation ID in the app URL. Up to the latest 20 messages are sent to the language model as conversation context. Use **Reset chat** to clear the current conversation. The database is ignored by Git.
+
+## Limitations
+
+- The included dataset is a 1,000-record sample, not the full Myntra catalogue.
+- Prices, ratings, discounts, and links may be outdated; availability is not verified.
+- Colour is extracted only when a colour word appears in the product description. Navy Blue and Blue are separate dataset values.
+- The app has a small deterministic synonym table; unfamiliar slang may not be understood by the structured search layer.
+- Images are displayed from catalogue URLs; image upload and visual recognition are not implemented.
+- If the sentence-transformer model cannot be loaded, `auto` may fall back to hashing embeddings, which provide lexical rather than semantic search. The app indicates the active embedder in its status area.
 
 ## Troubleshooting
-- **Sidebar shows "hashing" embedder / warning** – sentence-transformers or the model download is unavailable. Install it and check internet access to huggingface.co, then re-run with `EMBEDDING_BACKEND=sentence-transformers` to see the exact error.
-- **No AI answers** – the selected provider key is missing or the API call failed; the response says which.
-- **Dataset not found** – check `DATASET_PATH`.
-- **Stale or odd results after changing models** – `python scripts/build_index.py --rebuild`.
-- **PowerShell won't activate the venv** – `Set-ExecutionPolicy -Scope Process RemoteSigned`.
 
-## Known limitations / honest status
-- This ZIP is a sample of 1,000 Myntra product records, not the full catalog.
-- The CSV has no stock-status column or standalone color column. Color is extracted only when a color word appears explicitly in the product description; stock is never inferred. Some records lack gender, color, material, or discount.
-- Prices, discounts, ratings, and product links are a static snapshot; live Myntra availability and URL responses were not verified in this environment.
-- The current local `.env` selects the offline hashing embedder because model downloads from Hugging Face are unavailable in this environment. It is lexical, not semantic. Set `EMBEDDING_BACKEND=auto` with network access to try the configured SentenceTransformer model.
-- The OpenAI call was tested only with a mocked client, never against the live API.
-- Synonyms (`sportswear`, `clothing`, `sneakers`, `pants`, …) are a small documented table in `src/filters.py`; unknown slang is not understood by the structured layer.
-- Navy Blue is a separate colour from Blue (exact dataset values); "blue jeans" does not include Navy Blue.
-- No image upload / visual recognition is implemented; images are only displayed.
-=======
-# Fashion_Chatbot
->>>>>>> 54018e9188d815256216d46fa45ecbca2e24621e
+- **No AI answers:** Check the selected provider and API key, then restart Streamlit.
+- **Dataset not found:** Check `DATASET_PATH`.
+- **Unexpected results after changing embedding models:** Run `python scripts/build_index.py --rebuild`.
+- **PowerShell blocks activation:** Run `Set-ExecutionPolicy -Scope Process RemoteSigned` in that terminal.
