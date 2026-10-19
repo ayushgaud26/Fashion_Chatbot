@@ -124,6 +124,10 @@ def detect_query_language(query: str) -> str:
 def translate_query(query: str) -> str:
     """Map common Hindi/Hinglish words onto the dataset's English search vocabulary."""
     text = unicodedata.normalize("NFKC", str(query or "")).lower()
+    # Treat English gender possessives as the gender itself. Without this, "men's"
+    # tokenizes to "men s" and the final s can be mistaken for catalogue size S.
+    text = re.sub(r"\bmen['’]s\b", "men", text)
+    text = re.sub(r"\bwomen['’]s\b", "women", text)
     text = re.sub(r"(?<=\d),(?=\d)", "", text)
     # Convert common Hindi-script price limits before tokenization loses word order.
     text = re.sub(r"([\d,]+)\s*(?:रुपये|रुपए)?\s*(?:से\s*)?(?:कम|नीचे)", r"under \1", text)

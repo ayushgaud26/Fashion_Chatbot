@@ -28,6 +28,13 @@ div[data-testid="stImage"] img {height: 230px; object-fit: contain; background: 
     color: #666; border-radius: .45rem; font-size: 2rem;}
 .product-name {height: 3.2em; overflow: hidden; line-height: 1.5em; display: -webkit-box;
     -webkit-line-clamp: 2; -webkit-box-orient: vertical;}
+@media (max-width: 760px) {
+    [class*="st-key-product_grid_"] [data-testid="stHorizontalBlock"] {flex-wrap: wrap;}
+    [class*="st-key-product_grid_"] [data-testid="stColumn"] {flex: 1 1 calc(50% - .5rem) !important; min-width: 0;}
+}
+@media (max-width: 480px) {
+    [class*="st-key-product_grid_"] [data-testid="stColumn"] {flex-basis: 100% !important;}
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -95,6 +102,23 @@ def previous_user_query(messages):
         if message.get("role") == "user" and message.get("content"):
             return str(message["content"])
     return ""
+
+
+def combine_filter_refinement(previous_query, query, vocab):
+    """Carry prior search intent into a clear filter-only follow-up such as 'for men'."""
+    previous = parse_query(previous_query, vocab)
+    current = parse_query(query, vocab)
+    if not previous_query or not previous.filters and not previous.residual_tokens:
+        return query
+    # A follow-up must be made only of recognized filters. Do not combine a new
+    # descriptive request, since that is likely a fresh search rather than a refinement.
+    if not current.filters or current.residual_tokens or current.unsupported:
+        return query
+    # Avoid combining contradictory values for the same field (for example, changing
+    # a previous men's request to women's); a same-field request should stand alone.
+    if set(previous.filters).intersection(current.filters):
+        return query
+    return f"{previous_query} {query}"
 
 
 def budget_amount(query):
@@ -198,13 +222,41 @@ def show_cards(products, engine, key, heading=None):
                     images[tasks[task]] = task.result()
                 except Exception:
                     images[tasks[task]] = None
-    for start in range(0, len(visible), 5):
-        row = st.columns(5, gap="small")
-        for col, product in zip(row, visible[start:start + 5]):
-            with col:
-                _card(product, images.get(product["id"]))
+    with st.container(key=f"product_grid_{key}"):
+        for start in range(0, len(visible), 3):
+            row = st.columns(3, gap="medium")
+            for col, product in zip(row, visible[start:start + 3]):
+                with col:
+                    _card(product, images.get(product["id"]))
     if len(products) > CARD_LIMIT:
         st.caption(f"Showing {CARD_LIMIT} of {len(products)} matches. Add a colour, size, or budget to narrow the list.")
+
+
+def render_refinement_buttons(products, query, key, vocab):
+    """Offer one-click refinements that are actually present in the current matches."""
+    if len(products) < 8:
+        return
+    parsed = parse_query(query, vocab)
+    choices = []
+    for field, label in (("gender", "Audience"), ("baseColour", "Colour"), ("size", "Size")):
+        if field in parsed.filters:
+            continue
+        values = sorted({
+            str(value).strip()
+            for product in products
+            for value in ([product.get(field)] if field != "size" else (product.get("sizeValues") or []))
+            if value and str(value).strip()
+        }, key=str.casefold)
+        # Keep the prompt useful and compact; skip fields with only one available value.
+        if len(values) > 1:
+            choices.extend((label, value) for value in values[:2])
+    if not choices:
+        return
+    st.caption("Narrow these results:")
+    columns = st.columns(min(4, len(choices)), gap="small")
+    for index, (label, value) in enumerate(choices[:4]):
+        if columns[index % len(columns)].button(f"{label}: {value}", key=f"refine_{key}_{label}_{value}", width="stretch"):
+            st.session_state["pending"] = f"{query} {value}"
 
 
 def find_related_products(engine, result, query, limit=3):
@@ -404,6 +456,10 @@ for index, message in enumerate(visible_messages):
         # Keep old turns in the transcript, but only load images for the latest result.
         if result_payload.get("products") and index == len(visible_messages) - 1:
             show_cards(result_payload["products"], engine, f"history_{index}")
+            render_refinement_buttons(
+                result_payload["products"], previous_user_query(visible_messages[:index]),
+                f"history_{index}", engine.catalog.vocab,
+            )
         if result_payload.get("suggestions") and index == len(visible_messages) - 1:
             show_cards(result_payload["suggestions"], engine, f"history_suggestions_{index}", "Similar items you could try")
 
@@ -458,8 +514,13 @@ if query:
                         )
                         displayed_products = []
                 else:
-                    result = engine.retriever.search(query)
                     previous = previous_products(earlier_messages)
+                    effective_query = query
+                    if previous:
+                        effective_query = combine_filter_refinement(
+                            previous_user_query(earlier_messages), query, engine.catalog.vocab
+                        )
+                    result = engine.retriever.search(effective_query)
                     translated_query = translate_query(query)
                     if previous and (CONTEXTUAL_FOLLOW_UP.search(query)
                                      or CONTEXTUAL_FOLLOW_UP.search(translated_query)):
@@ -489,6 +550,9 @@ if query:
         st.markdown(user_facing)
         if displayed_products:
             show_cards(displayed_products, engine, f"new_{len(st.session_state['messages'])}")
+            render_refinement_buttons(
+                result.products, query, f"new_{len(st.session_state['messages'])}", engine.catalog.vocab,
+            )
         if suggestions:
             show_cards(suggestions, engine, f"suggestions_{len(st.session_state['messages'])}", "Similar items you could try")
 
