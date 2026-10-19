@@ -260,25 +260,12 @@ def render_refinement_buttons(products, query, key, vocab):
 
 
 def find_related_products(engine, result, query, limit=3):
-    """Relax optional attributes one at a time while retaining the main product category."""
+    """Suggest alternatives only when the request did not specify hard catalogue filters."""
     filters = dict(result.filters or {})
-    relax_order = ("brand", "baseColour", "material", "size", "usage", "season", "gender",
-                   "articleType", "subCategory", "masterCategory")
-    category_fields = {"articleType", "subCategory", "masterCategory"}
-    for field in relax_order:
-        if field not in filters:
-            continue
-        # Keep at least one product-type/category constraint so a failed search does not
-        # turn into a random recommendation from the entire catalogue.
-        if field in category_fields and len(category_fields.intersection(filters)) == 1:
-            continue
-        filters.pop(field)
-        matches = engine.catalog.filter(filters)
-        if matches:
-            return sorted(matches, key=lambda p: (
-                -(p.get("rating") or 0), float(p.get("price") or 10**12)
-            ))[:limit]
-
+    # A result that violates an explicit filter is not a useful alternative. In
+    # particular, do not drop style, gender, colour, or product type after a no-match.
+    if filters:
+        return []
     parsed = parse_query(query, engine.catalog.vocab)
     keyword_hits = engine.catalog.keyword_hits(parsed.residual_tokens)
     if keyword_hits:
@@ -371,11 +358,13 @@ def localized(query, english, hindi, hinglish):
     return english
 
 
-def no_match_reply(query, suggestions, missing_brand=None):
+def no_match_reply(query, suggestions, missing_brand=None, filters=None):
     if missing_brand:
         return (f"I couldn’t find **{missing_brand}** in this catalogue, but I can suggest these similar items:"
                 if suggestions else
                 f"I couldn’t find **{missing_brand}** in this catalogue. Try another brand or product type and I’ll look again.")
+    if filters:
+        return "I couldn’t find any products matching all the filters in your request in this catalogue. Try removing or changing one filter."
     return ("I couldn’t find an exact match for that request in this catalogue, but I can suggest these similar items:"
             if suggestions else
             "I couldn’t find a close match in this catalogue. Try another brand, product type, colour, or budget and I’ll look again.")
@@ -544,7 +533,7 @@ if query:
                         displayed_products = result.products
                     else:
                         suggestions = find_related_products(engine, result, query)
-                        user_facing = no_match_reply(query, suggestions)
+                        user_facing = no_match_reply(query, suggestions, filters=result.filters)
                         displayed_products = []
 
         st.markdown(user_facing)
