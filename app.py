@@ -69,7 +69,10 @@ GOODBYES = re.compile(
     re.I,
 )
 DECLINES = re.compile(
-    r"^(?:no|nope|nah+|na+h+|not really|no thanks?|no thank you+|nahi|nhi|na)"
+    r"^(?:no|nope|nah+|na+h+|not really|no thanks?|no thank you+|nahi|nhi|na|"
+    r"not\s+(?:this|that|these|those)(?:\s+(?:types?|kinds?|ones?|items?|products?|categories?|styles?|options?))?|"
+    r"(?:this|that|these|those)\s+(?:is|are)\s+not\s+(?:what\s+i\s+want|right)|"
+    r"not what i want|not interested|i\s+don'?t\s+want\s+(?:this|that|these|those))"
     r"[.!?,\s]*$",
     re.I,
 )
