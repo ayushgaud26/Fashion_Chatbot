@@ -316,6 +316,26 @@ def requested_missing_brand(engine, query):
     return words[0]
 
 
+def requested_missing_item_type(engine, query):
+    """Catch requested item types that are absent so semantic matches cannot masquerade as them."""
+    normalized = translate_query(query).lower()
+    missing_types = {
+        "perfume": "perfumes",
+        "perfumes": "perfumes",
+    }
+    for term, label in missing_types.items():
+        if not re.search(rf"\b{re.escape(term)}\b", normalized):
+            continue
+        available = any(
+            term in str(product.get(field) or "").lower()
+            for product in engine.catalog.records
+            for field in ("articleType", "subCategory", "productDisplayName")
+        )
+        if not available:
+            return label
+    return None
+
+
 def is_general_brand_question(engine, query):
     """Handle requests for a universal 'best brand' without inventing a ranking."""
     normalized = re.sub(r"\s+", " ", translate_query(query).lower()).strip()
@@ -535,8 +555,16 @@ if query:
                         result = RetrievalResult(query=query, method="follow_up", products=previous,
                                                  total_matches=len(previous),
                                                  notes=["Using products from your previous query for this comparison."])
+                    missing_item_type = requested_missing_item_type(engine, translated_query)
                     missing_brand = requested_missing_brand(engine, translated_query)
-                    if missing_brand:
+                    if missing_item_type:
+                        result = RetrievalResult(query=query, method="no_match",
+                                                 filters={"articleType": [missing_item_type.title()]})
+                        user_facing = (f"Oops! {missing_item_type.title()} aren’t available in this catalogue. "
+                                       "Try another product category and I’ll look for matching items.")
+                        displayed_products = []
+                        suggestions = []
+                    elif missing_brand:
                         suggestions = result.products[:3] if result.products else find_related_products(engine, result, query)
                         user_facing = no_match_reply(query, suggestions, missing_brand)
                         displayed_products = []
@@ -545,7 +573,7 @@ if query:
                         answer = engine.llm.generate(query, result, history=earlier_messages) if result.products else None
                     else:
                         answer = None
-                    if missing_brand:
+                    if missing_item_type or missing_brand:
                         pass
                     elif result.products:
                         user_facing = response_text(result, answer, query)
