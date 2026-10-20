@@ -68,6 +68,11 @@ GOODBYES = re.compile(
     r"[.!?,\s]*$",
     re.I,
 )
+DECLINES = re.compile(
+    r"^(?:no|nope|nah+|na+h+|not really|no thanks?|no thank you+|nahi|nhi|na)"
+    r"[.!?,\s]*$",
+    re.I,
+)
 NEEDS_LLM_SYNTHESIS = re.compile(
     r"\b(?:compare|comparison|versus|vs|which|better|best|recommend|recommendation|"
     r"difference|why|explain|suggest|price|cost|rating|discount|how|what)\b",
@@ -390,6 +395,19 @@ def greeting_reply(query):
     )
 
 
+def decline_reply(query):
+    """Treat a standalone refusal as conversation, not a product search query."""
+    normalized = re.sub(r"\s+", " ", translate_query(query).strip())
+    if not DECLINES.fullmatch(normalized):
+        return None
+    return localized(
+        query,
+        "No problem. What product or category would you like to look for instead?",
+        "कोई बात नहीं। आप इसके बजाय कौन-सा प्रोडक्ट या कैटेगरी ढूँढना चाहेंगे?",
+        "Koi baat nahi. Aap iske badle kaunsa product ya category dekhna chahenge?",
+    )
+
+
 def localized(query, english, hindi, hinglish):
     # Always use English for assistant replies, regardless of the user's input language.
     return english
@@ -502,11 +520,16 @@ if query:
 
     with st.chat_message("assistant"):
         smalltalk = greeting_reply(query)
+        declined = decline_reply(query) if not smalltalk else None
         suggestions = []
         answer = None
         if smalltalk:
             result = RetrievalResult(query=query, method="smalltalk", message=smalltalk)
             user_facing = smalltalk
+            displayed_products = []
+        elif declined:
+            result = RetrievalResult(query=query, method="smalltalk", message=declined)
+            user_facing = declined
             displayed_products = []
         elif is_general_brand_question(engine, query):
             result = RetrievalResult(query=query, method="brand_guidance")
