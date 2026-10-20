@@ -260,12 +260,29 @@ def render_refinement_buttons(products, query, key, vocab):
 
 
 def find_related_products(engine, result, query, limit=3):
-    """Suggest alternatives only when the request did not specify hard catalogue filters."""
+    """Find clearly related alternatives without dropping product type or audience."""
     filters = dict(result.filters or {})
-    # A result that violates an explicit filter is not a useful alternative. In
-    # particular, do not drop style, gender, colour, or product type after a no-match.
+    category_fields = {"articleType", "subCategory", "masterCategory"}
+    # Only relax optional attributes when the query also pins down a product type.
+    # Preserve category, gender, and usage (e.g. Traditional + Men) so alternatives
+    # cannot drift into unrelated items such as underwear.
+    if filters and category_fields.intersection(filters):
+        relaxable = ("baseColour", "size", "material", "season", "brand")
+        relaxed = set()
+        for field in relaxable:
+            if field not in filters:
+                continue
+            relaxed.add(field)
+            candidates = {key: values for key, values in filters.items() if key not in relaxed}
+            matches = engine.catalog.filter(candidates)
+            if matches:
+                return sorted(matches, key=lambda p: (
+                    -(p.get("rating") or 0), float(p.get("price") or 10**12)
+                ))[:limit]
+        return []
     if filters:
         return []
+
     parsed = parse_query(query, engine.catalog.vocab)
     keyword_hits = engine.catalog.keyword_hits(parsed.residual_tokens)
     if keyword_hits:
@@ -363,8 +380,10 @@ def no_match_reply(query, suggestions, missing_brand=None, filters=None):
         return (f"I couldn’t find **{missing_brand}** in this catalogue, but I can suggest these similar items:"
                 if suggestions else
                 f"I couldn’t find **{missing_brand}** in this catalogue. Try another brand or product type and I’ll look again.")
+    if filters and suggestions:
+        return "Oops! I couldn’t find an exact match for all your filters. Here are other options that keep your requested product type; they may differ on colour, size, material, or brand."
     if filters:
-        return "I couldn’t find any products matching all the filters in your request in this catalogue. Try removing or changing one filter."
+        return "Oops! I couldn’t find a product matching all your filters in this catalogue. Try changing one filter."
     return ("I couldn’t find an exact match for that request in this catalogue, but I can suggest these similar items:"
             if suggestions else
             "I couldn’t find a close match in this catalogue. Try another brand, product type, colour, or budget and I’ll look again.")
