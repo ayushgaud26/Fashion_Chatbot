@@ -330,6 +330,10 @@ def requested_missing_brand(engine, query):
 
 def requested_missing_item_type(engine, query):
     """Stop unresolved request terms from being treated as semantic matches."""
+    # A contextual comparison refers to products already in the conversation;
+    # words such as "one" or "option" must not be mistaken for a product type.
+    if CONTEXTUAL_FOLLOW_UP.search(query):
+        return None
     parsed = parse_query(query, engine.catalog.vocab)
     request_words = {"suggest", "suggestion", "suggestions", "recommend", "recommendation",
                      "show", "find", "search", "get", "give", "want", "need", "looking",
