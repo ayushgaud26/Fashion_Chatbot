@@ -545,10 +545,6 @@ for index, message in enumerate(visible_messages):
     with st.chat_message(message["role"]):
         content = message["content"]
         result_payload = message.get("result") or {}
-        if message["role"] == "assistant" and (
-            result_payload.get("products") or result_payload.get("suggestions")
-        ):
-            content = ""
         # Older saved turns contained verbose internal fallback/debug text; display them cleanly.
         if message["role"] == "assistant" and result_payload.get("products") and (
             "Catalogue-search result" in content or "Source product IDs" in content
@@ -606,12 +602,8 @@ if query:
                 if budget_context:
                     result, suggestions, amount = budget_context
                     if result.products:
-                        user_facing = localized(
-                            query,
-                            f"I found {result.total_matches} options from your previous request priced at or below ₹{amount:,.0f}.",
-                            f"आपकी पिछली रिक्वेस्ट के लिए ₹{amount:,.0f} तक के {result.total_matches} विकल्प मिले।",
-                            f"Aapki pehli request ke liye ₹{amount:,.0f} tak ke {result.total_matches} options mile.",
-                        )
+                        answer = engine.llm.generate(query, result, history=earlier_messages)
+                        user_facing = response_text(result, answer, query)
                         displayed_products = result.products
                     else:
                         user_facing = localized(
@@ -663,17 +655,18 @@ if query:
                         user_facing = no_match_reply(query, suggestions, filters=result.filters)
                         displayed_products = []
 
-        has_cards = bool(displayed_products or suggestions)
-        if not has_cards:
-            st.markdown(user_facing)
+        st.markdown(user_facing)
         if displayed_products:
             show_cards(displayed_products, engine, f"new_{len(st.session_state['messages'])}")
+            render_refinement_buttons(
+                displayed_products, query, f"new_{len(st.session_state['messages'])}", engine.catalog.vocab,
+            )
         if suggestions:
             show_cards(suggestions, engine, f"suggestions_{len(st.session_state['messages'])}")
 
     payload = {"method": result.method, "filters": result.filters, "total_matches": result.total_matches,
                "products": displayed_products, "suggestions": suggestions,
                "unsupported": result.unsupported, "notes": result.notes, "distances": result.distances}
-    assistant_message = {"role": "assistant", "content": "" if has_cards else user_facing, "result": payload}
+    assistant_message = {"role": "assistant", "content": user_facing, "result": payload}
     st.session_state["messages"].append(assistant_message)
     memory.save_message(st.session_state["conversation_id"], assistant_message)
