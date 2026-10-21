@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +46,9 @@ def load_records(cfg: Config, limit: int | None = None):
     """Load -> validate -> preprocess. Returns (records, report, arrow_table)."""
     if cfg.dataset_path.suffix.lower() == ".csv":
         records, rep, frame = load_myntra_csv(cfg.dataset_path)
+        records, dropped = _keep_priced_records(records)
+        rep.missing_by_field["price"] = rep.missing_by_field.get("price", 0) + dropped
+        rep.valid_records = len(records)
         cap = limit or cfg.dev_subset_size
         if cap:
             records = records[:cap]
@@ -53,7 +57,23 @@ def load_records(cfg: Config, limit: int | None = None):
     table = load_dataset_table(cfg.dataset_path)
     validate_columns(table.column_names)
     records, rep = preprocess_records(table_to_records(table, limit or cfg.dev_subset_size or None))
+    records, dropped = _keep_priced_records(records)
+    rep.missing_by_field["price"] = rep.missing_by_field.get("price", 0) + dropped
+    rep.valid_records = len(records)
     return records, rep, table
+
+
+def _keep_priced_records(records: list[dict]) -> tuple[list[dict], int]:
+    """Exclude products without a finite, non-negative price from the searchable catalogue."""
+    kept = []
+    for record in records:
+        try:
+            price = float(record.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(price) and price >= 0:
+            kept.append(record)
+    return kept, len(records) - len(kept)
 
 
 def export_json(records: list[dict], path: Path) -> str:
