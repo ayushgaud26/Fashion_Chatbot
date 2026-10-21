@@ -53,8 +53,8 @@ def build_context(result: RetrievalResult, max_items: int = 15) -> str:
 
 def unknown_ids_in(text: str, result: RetrievalResult, question: str) -> list[str]:
     allowed = {str(i) for i in result.ids} | {str(p["year"]) for p in result.products if p.get("year")}
-    # Catalogue numbers such as prices and review counts can look like product IDs.
-    # Permit exact values so grounded answers are not rejected when written without commas.
+    # Catalogue facts such as prices and review counts can look like product IDs.
+    # Validate only numbers explicitly labelled as IDs/SKUs, not every 4-6 digit number.
     for product in result.products:
         for field in ("price", "originalPrice", "reviewCount"):
             try:
@@ -63,7 +63,11 @@ def unknown_ids_in(text: str, result: RetrievalResult, question: str) -> list[st
             except (TypeError, ValueError, OverflowError):
                 pass
     allowed |= set(re.findall(r"\b\d{3,7}\b", question))
-    return [n for n in re.findall(r"\b\d{4,6}\b", text) if n not in allowed]
+    candidates = re.findall(
+        r"(?:\b(?:product\s+|item\s+)?(?:id|sku)\s*(?:is\s*)?[:#]?\s*|#)(\d{4,10})\b",
+        text, re.I,
+    )
+    return [n for n in candidates if n not in allowed]
 
 
 class LLMService:
