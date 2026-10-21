@@ -325,23 +325,20 @@ def requested_missing_brand(engine, query):
 
 
 def requested_missing_item_type(engine, query):
-    """Catch requested item types that are absent so semantic matches cannot masquerade as them."""
-    normalized = translate_query(query).lower()
-    item_types = ((r"perfumes?", "Perfumes"), (r"belts?", "Belts"))
+    """Stop unresolved request terms from being treated as semantic matches."""
     parsed = parse_query(query, engine.catalog.vocab)
-    if {"articleType", "subCategory"}.intersection(parsed.filters):
+    request_words = {"suggest", "suggestion", "suggestions", "recommend", "recommendation",
+                     "show", "find", "search", "get", "give", "want", "need", "looking"}
+    unresolved = [token for token in parsed.residual_tokens if token not in request_words]
+    if not unresolved:
         return None
-    for pattern, label in item_types:
-        if not re.search(rf"\b{pattern}\b", normalized):
-            continue
-        available = any(
-            re.search(rf"\b{pattern}\b", str(product.get(field) or "").lower())
-            for product in engine.catalog.records
-            for field in ("articleType", "subCategory")
-        )
-        if not available:
-            return label
-    return None
+
+    labels = {
+        "perfume": "Perfumes", "perfumes": "Perfumes",
+        "belt": "Belts", "belts": "Belts",
+        "handbag": "Handbags", "handbags": "Handbags",
+    }
+    return " ".join(labels.get(token, token.title()) for token in unresolved)
 
 
 def is_general_brand_question(engine, query):
@@ -586,8 +583,8 @@ if query:
                     if missing_item_type:
                         result = RetrievalResult(query=query, method="no_match",
                                                  filters={"articleType": [missing_item_type.title()]})
-                        user_facing = (f"Oops! {missing_item_type.title()} aren’t available in this catalogue. "
-                                       "Try another product category and I’ll look for matching items.")
+                        user_facing = (f"Oops! I couldn’t find catalogue items matching **{missing_item_type}**. "
+                                       "I won’t show unrelated products. Try another product type or change a filter.")
                         displayed_products = []
                         suggestions = []
                     elif missing_brand:
