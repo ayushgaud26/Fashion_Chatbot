@@ -327,17 +327,17 @@ def requested_missing_brand(engine, query):
 def requested_missing_item_type(engine, query):
     """Catch requested item types that are absent so semantic matches cannot masquerade as them."""
     normalized = translate_query(query).lower()
-    missing_types = {
-        "perfume": "perfumes",
-        "perfumes": "perfumes",
-    }
-    for term, label in missing_types.items():
-        if not re.search(rf"\b{re.escape(term)}\b", normalized):
+    item_types = ((r"perfumes?", "Perfumes"), (r"belts?", "Belts"))
+    parsed = parse_query(query, engine.catalog.vocab)
+    if {"articleType", "subCategory"}.intersection(parsed.filters):
+        return None
+    for pattern, label in item_types:
+        if not re.search(rf"\b{pattern}\b", normalized):
             continue
         available = any(
-            term in str(product.get(field) or "").lower()
+            re.search(rf"\b{pattern}\b", str(product.get(field) or "").lower())
             for product in engine.catalog.records
-            for field in ("articleType", "subCategory", "productDisplayName")
+            for field in ("articleType", "subCategory")
         )
         if not available:
             return label
