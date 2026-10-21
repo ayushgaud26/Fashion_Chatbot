@@ -54,6 +54,9 @@ def build_context(result: RetrievalResult, max_items: int = 15) -> str:
 
 
 def unknown_ids_in(text: str, result: RetrievalResult, question: str) -> list[str]:
+    # Product-search prose does not need IDs; validate them strictly only when requested.
+    if not re.search(r"\b(?:(?:product|item)\s+)?(?:id|sku)\b|#\s*\d", question, re.I):
+        return []
     allowed = {str(i) for i in result.ids} | {str(p["year"]) for p in result.products if p.get("year")}
     # Catalogue facts such as prices and review counts can look like product IDs.
     # Validate only numbers explicitly labelled as IDs/SKUs, not every 4-6 digit number.
