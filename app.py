@@ -328,7 +328,13 @@ def requested_missing_item_type(engine, query):
     """Stop unresolved request terms from being treated as semantic matches."""
     parsed = parse_query(query, engine.catalog.vocab)
     request_words = {"suggest", "suggestion", "suggestions", "recommend", "recommendation",
-                     "show", "find", "search", "get", "give", "want", "need", "looking"}
+                     "show", "find", "search", "get", "give", "want", "need", "looking",
+                     # Intent/comparison language is not a requested product type.
+                     "compare", "comparison", "versus", "vs", "between", "both", "which",
+                     "better", "best", "difference", "differences", "cheaper", "cheapest",
+                     # Budget operators are handled by HybridRetriever, not product categories.
+                     "under", "below", "less", "than", "up", "to", "upto", "at", "most",
+                     "within", "over", "above", "more", "least", "andar"}
     unresolved = [token for token in parsed.residual_tokens if token not in request_words]
     if not unresolved:
         return None

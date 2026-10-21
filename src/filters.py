@@ -136,6 +136,8 @@ def translate_query(query: str) -> str:
     text = re.sub(r"\bwomen['’]s\b", "women", text)
     text = re.sub(r"(?<=\d),(?=\d)", "", text)
     # Convert common Hindi-script price limits before tokenization loses word order.
+    text = re.sub(r"([\d,]+)\s*(?:रुपये|रुपए)?\s*के?\s*अंदर(?=\s|$)", r"under \1", text)
+    text = re.sub(r"([\d,]+)\s*(?:rupees?|rs\.?)?\s*(?:ke\s*)?andar\b", r"under \1", text)
     text = re.sub(r"([\d,]+)\s*(?:रुपये|रुपए)?\s*(?:से\s*)?(?:कम|नीचे)", r"under \1", text)
     text = re.sub(r"([\d,]+)\s*(?:रुपये|रुपए)?\s*(?:से\s*)?(?:ज्यादा|अधिक|ऊपर)", r"over \1", text)
     text = re.sub(r"([\d,]+)\s*(?:rupees?|rs\.?)?\s*(?:se\s*)?(?:kam|neeche)\b", r"under \1", text)
