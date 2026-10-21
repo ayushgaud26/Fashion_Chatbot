@@ -24,7 +24,7 @@ SYNONYMS: dict[str, list[tuple[str, list[str]]]] = {
     "sportswear": [("usage", ["Sports"]), ("masterCategory", ["Apparel"])],
     "sports wear": [("usage", ["Sports"]), ("masterCategory", ["Apparel"])],
     "activewear": [("usage", ["Sports"]), ("masterCategory", ["Apparel"])],
-    "clothing": [("masterCategory", ["Apparel"])], "clothes": [("masterCategory", ["Apparel"])],
+    "clothing": [("masterCategory", ["Clothing"])], "clothes": [("masterCategory", ["Clothing"])],
     "sneakers": [("articleType", ["Casual Shoes", "Sports Shoes"])],
     "sneaker": [("articleType", ["Casual Shoes", "Sports Shoes"])],
     "trainers": [("articleType", ["Sports Shoes"])],
@@ -209,6 +209,8 @@ class Vocabulary:
             ("shoes", "articleType", "shoe"), ("sandals", "articleType", "sandal"),
             ("sandals", "articleType", "slipper"), ("bag", "articleType", "bag"),
             ("bag", "subCategory", "bag"), ("cap", "articleType", "cap"),
+            ("handbag", "articleType", "handbag"), ("handbag", "subCategory", "handbag"),
+            ("handbag", "articleType", "purse"), ("handbag", "subCategory", "purse"),
         ):
             keep = [v for v in self.values.get(field_name, [])
                     if fragment in normalize_text(v)]
@@ -269,6 +271,20 @@ def parse_query(query: str, vocab: Vocabulary) -> ParsedQuery:
             pq.residual_tokens.append(tok)
         i += 1
     pq.unsupported = unsupported
+    # Occasion/style words alone should search apparel, not unrelated products
+    # (for example, watches tagged Formal). Keep any explicit product category
+    # from the query, and use semantic ranking only inside the resulting filters.
+    if not any(pq.filters.get(field) for field in ("masterCategory", "subCategory", "articleType")):
+        usage = set(pq.filters.get("usage", []))
+        if usage.intersection({"Formal", "Traditional"}):
+            categories = vocab.values.get("masterCategory", [])
+            clothing = next((value for value in categories
+                             if normalize_text(value) == "clothing"), None)
+            if clothing is None:
+                clothing = next((value for value in categories
+                                 if normalize_text(value) == "apparel"), None)
+            if clothing:
+                pq.filters.setdefault("masterCategory", []).append(clothing)
     return pq
 
 
