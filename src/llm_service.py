@@ -77,7 +77,7 @@ def unknown_ids_in(text: str, result: RetrievalResult, question: str) -> list[st
 
 class LLMService:
     def __init__(self, api_key: str | None, model: str = "gpt-4o-mini", temperature: float = 0.1,
-                 client=None, max_context_items: int = 15, timeout: float = 30.0,
+                 client=None, max_context_items: int = 15, timeout: float = 60.0,
                  provider: str = "openai"):
         self.api_key, self.model, self.temperature = api_key, model, temperature
         self.provider = provider
@@ -118,12 +118,23 @@ class LLMService:
             "Keep exact product names, brand names, prices, sizes, and URLs as they appear in the catalogue."
         )
         try:
+            request_options = {}
+            if self.provider == "gemini":
+                # Gemini 3 models support thinking controls through the OpenAI
+                # compatibility endpoint. Minimal thinking keeps this short,
+                # catalogue-grounded answer path responsive.
+                request_options["extra_body"] = {
+                    "extra_body": {
+                        "google": {"thinking_config": {"thinking_level": "minimal"}}
+                    }
+                }
             resp = self._get_client().chat.completions.create(
                 model=self.model, temperature=self.temperature, max_tokens=600,
                 messages=[{"role": "system", "content": f"{SYSTEM_PROMPT} {language_instruction}"},
                           {"role": "user", "content": (f"Recent conversation:\n{history_context}\n\n"
                                                            f"Current question: {question}\n\n"
                                                            f"{build_context(result, self.max_context_items)}")}],
+                **request_options,
             )
             text = (resp.choices[0].message.content or "").strip()
         except Exception as exc:  # network, auth, rate limit, malformed response...
