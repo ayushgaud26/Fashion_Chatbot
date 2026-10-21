@@ -31,6 +31,12 @@ SYNONYMS: dict[str, list[tuple[str, list[str]]]] = {
     "t shirt": [("articleType", ["Tshirts"])], "tee": [("articleType", ["Tshirts"])],
     "pants": [("articleType", ["Trousers", "Track Pants"])],
     "perfume": [("subCategory", ["Fragrance"])], "perfumes": [("subCategory", ["Fragrance"])],
+    "office wear": [("masterCategory", ["Clothing"]), ("usage", ["Formal"])],
+    "officewear": [("masterCategory", ["Clothing"]), ("usage", ["Formal"])],
+    "work wear": [("masterCategory", ["Clothing"]), ("usage", ["Formal"])],
+    "workwear": [("masterCategory", ["Clothing"]), ("usage", ["Formal"])],
+    "traditional": [("usage", ["Traditional"])],
+    "traditional wear": [("masterCategory", ["Clothing"]), ("usage", ["Traditional"])],
     "lal": [("baseColour", ["Red"])], "laal": [("baseColour", ["Red"])],
     "gray": [("baseColour", ["Grey"])], "navy": [("baseColour", ["Navy Blue"])],
 }
