@@ -63,8 +63,15 @@ def get_config() -> Config:
     else:
         llm_api_key = os.getenv("GEMINI_API_KEY") or None
         llm_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    dataset_path = _path("DATASET_PATH", "data/myntra/myntra-dataset-sample-main/Myntra products .csv")
+    preferred_csv = PROJECT_ROOT / "data" / "myntra" / "myntra-dataset-sample-main" / "Myntra products .csv"
+    # The Arrow sample has blurry thumbnails and lacks prices/review counts. If a
+    # deployment still points DATASET_PATH at Arrow, prefer the enriched CSV shared
+    # with this project so product cards show its URLs, prices and ratings.
+    if dataset_path.suffix.lower() != ".csv" and preferred_csv.exists():
+        dataset_path = preferred_csv
     return Config(
-        dataset_path=_path("DATASET_PATH", "data/myntra/myntra-dataset-sample-main/Myntra products .csv"),
+        dataset_path=dataset_path,
         products_json_path=_path("PRODUCTS_JSON_PATH", "data/products.json"),
         retail_catalog_path=_path("RETAIL_CATALOG_PATH", "data/retail_products.json"),
         chroma_dir=_path("CHROMA_DIR", "chroma_db"),

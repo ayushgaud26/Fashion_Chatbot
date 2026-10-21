@@ -54,7 +54,11 @@ def fetch_product_image(url):
         return None
 
 
-EXAMPLES = ["Find blue jeans", "Show men's casual shirts", "Show me sarees"]
+EXAMPLES = [
+    ("Find blue jeans", "Find blue jeans"),
+    ("Show men's casual shirts", "Show men's casual shirts"),
+    ("Show me saree", "traditional wear"),
+]
 CARD_LIMIT = 10
 THANKS_PATTERN = r"(?:thanks?|thank\s*you+|thank\s*u+|thx+|thnx+|ty)"
 GREETINGS = re.compile(
@@ -517,9 +521,9 @@ else:
         st.caption(f"Catalogue search is ready · {engine.config.llm_provider.title()} API key missing. Set its API key in this terminal, then restart Streamlit.")
 
 example_cols = st.columns(len(EXAMPLES))
-for col, example in zip(example_cols, EXAMPLES):
-    if col.button(example, key=f"example_{example}", width="stretch"):
-        st.session_state["pending"] = example
+for col, (label, query) in zip(example_cols, EXAMPLES):
+    if col.button(label, key=f"example_{label}", width="stretch"):
+        st.session_state["pending"] = query
 
 visible_messages = st.session_state["messages"][-20:]
 for index, message in enumerate(visible_messages):
