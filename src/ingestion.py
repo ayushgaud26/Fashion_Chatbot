@@ -49,25 +49,6 @@ def load_records(cfg: Config, limit: int | None = None):
         if cap:
             records = records[:cap]
             rep.valid_records = len(records)
-        # The CSV is a small, enriched catalogue (prices, ratings and product URLs),
-        # but it omits some categories. Supplement missing IDs from the bundled
-        # Myntra Arrow shard, which includes product images and category metadata.
-        supplement_path = cfg.dataset_path.parents[2] / "source" / "data-00000-of-00001.arrow"
-        if supplement_path.exists():
-            table = load_dataset_table(supplement_path)
-            validate_columns(table.column_names)
-            extra, extra_rep = preprocess_records(
-                table_to_records(table, limit or cfg.dev_subset_size or None)
-            )
-            existing_ids = {r["id"] for r in records}
-            additions = [r for r in extra if r["id"] not in existing_ids]
-            records.extend(additions)
-            rep.total_rows += extra_rep.total_rows
-            rep.valid_records = len(records)
-            rep.duplicate_ids_dropped += extra_rep.duplicate_ids_dropped
-            # Return the Arrow table so ImageStore can serve its embedded images;
-            # CSV image URLs remain available from the merged records.
-            return records, rep, table
         return records, rep, frame
     table = load_dataset_table(cfg.dataset_path)
     validate_columns(table.column_names)
