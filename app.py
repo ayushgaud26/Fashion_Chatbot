@@ -138,17 +138,28 @@ def budget_amount(query):
     match = re.search(r"\bbudget\b[^0-9]{0,24}(\d+(?:\.\d+)?)", text)
     if not match:
         match = re.search(r"(\d+(?:\.\d+)?)[^a-z0-9]{0,12}\bbudget\b", text)
+    if not match:
+        match = re.search(
+            r"\b(?:under|below|less than|up to|upto|within|at most)\s*(?:₹|rs\.?|inr)?\s*(\d+(?:\.\d+)?)",
+            text,
+        )
     return float(match.group(1)) if match else None
 
 
-def filter_previous_request_by_budget(engine, previous_query, query):
-    """Apply a budget follow-up to the immediately preceding product request."""
+def filter_previous_request_by_budget(engine, previous_query, query, previous=None):
+    """Apply a budget to the previous cards, previous request, or catalogue if new."""
     amount = budget_amount(query)
-    if amount is None or not previous_query:
+    if amount is None:
         return None
-    prior = engine.retriever.search(previous_query)
-    filters = prior.filters or {}
-    candidates = engine.catalog.filter(filters) if filters else prior.products
+    filters = {}
+    if previous:
+        candidates = [engine.catalog.by_id.get(p.get("id"), p) for p in previous]
+    elif previous_query:
+        prior = engine.retriever.search(previous_query)
+        filters = prior.filters or {}
+        candidates = engine.catalog.filter(filters) if filters else prior.products
+    else:
+        candidates = engine.catalog.records
     if not candidates:
         return None
 
@@ -534,6 +545,10 @@ for index, message in enumerate(visible_messages):
     with st.chat_message(message["role"]):
         content = message["content"]
         result_payload = message.get("result") or {}
+        if message["role"] == "assistant" and (
+            result_payload.get("products") or result_payload.get("suggestions")
+        ):
+            content = ""
         # Older saved turns contained verbose internal fallback/debug text; display them cleanly.
         if message["role"] == "assistant" and result_payload.get("products") and (
             "Catalogue-search result" in content or "Source product IDs" in content
@@ -584,8 +599,9 @@ if query:
         else:
             with st.spinner("Finding the best matches…"):
                 earlier_messages = st.session_state["messages"][:-1]
+                previous = previous_products(earlier_messages)
                 budget_context = filter_previous_request_by_budget(
-                    engine, previous_user_query(earlier_messages), query
+                    engine, previous_user_query(earlier_messages), query, previous
                 )
                 if budget_context:
                     result, suggestions, amount = budget_context
@@ -606,7 +622,6 @@ if query:
                         )
                         displayed_products = []
                 else:
-                    previous = previous_products(earlier_messages)
                     effective_query = query
                     if previous:
                         effective_query = combine_filter_refinement(
@@ -648,18 +663,17 @@ if query:
                         user_facing = no_match_reply(query, suggestions, filters=result.filters)
                         displayed_products = []
 
-        st.markdown(user_facing)
+        has_cards = bool(displayed_products or suggestions)
+        if not has_cards:
+            st.markdown(user_facing)
         if displayed_products:
             show_cards(displayed_products, engine, f"new_{len(st.session_state['messages'])}")
-            render_refinement_buttons(
-                result.products, query, f"new_{len(st.session_state['messages'])}", engine.catalog.vocab,
-            )
         if suggestions:
-            show_cards(suggestions, engine, f"suggestions_{len(st.session_state['messages'])}", "Similar items you could try")
+            show_cards(suggestions, engine, f"suggestions_{len(st.session_state['messages'])}")
 
     payload = {"method": result.method, "filters": result.filters, "total_matches": result.total_matches,
                "products": displayed_products, "suggestions": suggestions,
                "unsupported": result.unsupported, "notes": result.notes, "distances": result.distances}
-    assistant_message = {"role": "assistant", "content": user_facing, "result": payload}
+    assistant_message = {"role": "assistant", "content": "" if has_cards else user_facing, "result": payload}
     st.session_state["messages"].append(assistant_message)
     memory.save_message(st.session_state["conversation_id"], assistant_message)
