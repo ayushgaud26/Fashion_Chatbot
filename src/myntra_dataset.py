@@ -59,6 +59,18 @@ def _details(raw):
     return result
 
 
+def _clean_material(value):
+    """Return a useful material label, discarding catalogue instructions/placeholders."""
+    value = clean_text(value)
+    if not value:
+        return None
+    value = re.sub(r"^(?:watch\s+)?(?:material|fabric)\s*:\s*", "", value, flags=re.I).strip()
+    if not value or value.casefold() in {"na", "n/a", "regular", "please refer instruction manual",
+                                          "refer instruction manual", "not available", "unknown"}:
+        return None
+    return value
+
+
 _COLORS = ("navy blue", "sky blue", "light blue", "dark blue", "off white", "olive green", "sea green",
           "maroon", "beige", "black", "white", "blue", "red", "green", "pink", "purple", "orange",
           "yellow", "brown", "grey", "gray", "gold", "silver", "cream", "teal", "peach", "rust", "multi")
@@ -126,10 +138,11 @@ def load_myntra_csv(path: str | Path):
             image_url = "https://" + image_url[len("http://"):]
         product_details = details if isinstance(details, dict) else {}
         material_and_care = clean_text(product_details.get("material_and_care"))
-        material = specs.get("Fabric")
+        material = next((_clean_material(specs.get(key)) for key in
+                         ("Fabric", "Watch Material", "Strap Material", "Dial Material")
+                         if _clean_material(specs.get(key))), None)
         if not material and material_and_care:
-            material = material_and_care.split(",", 1)[0].split(".", 1)[0].strip()
-            material = re.sub(r"^(?:material|fabric)\s*:\s*", "", material, flags=re.I).strip() or None
+            material = _clean_material(material_and_care.split(",", 1)[0].split(".", 1)[0])
         size_fit = clean_text(product_details.get("size_and_fit"))
         color = specs.get("Colour") or _extract_color(product_details.get("description") or description)
         # delivery_options describe shipping and returns, not whether an item is in stock.
@@ -139,7 +152,11 @@ def load_myntra_csv(path: str | Path):
             "brand": brand, "gender": gender,
             "masterCategory": clean_text(crumbs[0].get("name")) if crumbs and isinstance(crumbs[0], dict) else None,
             "subCategory": category,
-            "articleType": specs.get("Type") or category, "baseColour": color,
+            # Myntra's Type field is frequently the generic fit value "Regular";
+            # using it as the article type mislabels watches, tops, and trousers.
+            "articleType": (specs.get("Type") if specs.get("Type", "").casefold() not in
+                            {"regular", "na", "n/a"} else None) or category,
+            "baseColour": color,
             "color": color, "colorSource": "product description" if color and not specs.get("Colour") else None,
             "material": material, "size": ", ".join(size_values) or None,
             "sizeValues": size_values,
