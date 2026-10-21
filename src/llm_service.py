@@ -53,10 +53,10 @@ def build_context(result: RetrievalResult, max_items: int = 15) -> str:
 
 def unknown_ids_in(text: str, result: RetrievalResult, question: str) -> list[str]:
     allowed = {str(i) for i in result.ids} | {str(p["year"]) for p in result.products if p.get("year")}
-    # Prices can look like product IDs (e.g. 1159 or 2899). Permit exact catalogue
-    # prices so a grounded answer is not rejected when the model writes them without commas.
+    # Catalogue numbers such as prices and review counts can look like product IDs.
+    # Permit exact values so grounded answers are not rejected when written without commas.
     for product in result.products:
-        for field in ("price", "originalPrice"):
+        for field in ("price", "originalPrice", "reviewCount"):
             try:
                 if product.get(field) is not None:
                     allowed.add(str(int(round(float(product[field])))))
