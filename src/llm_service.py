@@ -53,6 +53,15 @@ def build_context(result: RetrievalResult, max_items: int = 15) -> str:
 
 def unknown_ids_in(text: str, result: RetrievalResult, question: str) -> list[str]:
     allowed = {str(i) for i in result.ids} | {str(p["year"]) for p in result.products if p.get("year")}
+    # Prices can look like product IDs (e.g. 1159 or 2899). Permit exact catalogue
+    # prices so a grounded answer is not rejected when the model writes them without commas.
+    for product in result.products:
+        for field in ("price", "originalPrice"):
+            try:
+                if product.get(field) is not None:
+                    allowed.add(str(int(round(float(product[field])))))
+            except (TypeError, ValueError, OverflowError):
+                pass
     allowed |= set(re.findall(r"\b\d{3,7}\b", question))
     return [n for n in re.findall(r"\b\d{4,6}\b", text) if n not in allowed]
 
