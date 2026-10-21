@@ -54,7 +54,7 @@ def fetch_product_image(url):
         return None
 
 
-EXAMPLES = ["Find blue jeans", "Show men's casual shirts", "Find women's handbags"]
+EXAMPLES = ["Find blue jeans", "Show men's casual shirts", "Show men's shirts"]
 CARD_LIMIT = 10
 THANKS_PATTERN = r"(?:thanks?|thank\s*you+|thank\s*u+|thx+|thnx+|ty)"
 GREETINGS = re.compile(
