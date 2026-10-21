@@ -436,6 +436,9 @@ def no_match_reply(query, suggestions, missing_brand=None, filters=None):
 def response_text(result, answer, query):
     if answer is not None and answer.source == "llm":
         return answer.text
+    if answer is not None and answer.error:
+        return (f"⚠️ Gemini couldn’t generate an answer ({answer.error}). "
+                "I’m showing the matching catalogue products below.")
     if result.method == "follow_up":
         return localized(
             query,
@@ -597,9 +600,10 @@ if query:
                         suggestions = result.products[:3] if result.products else find_related_products(engine, result, query)
                         user_facing = no_match_reply(query, suggestions, missing_brand)
                         displayed_products = []
-                    elif result.products and (result.method in {"follow_up", "brand_comparison"}
-                                              or NEEDS_LLM_SYNTHESIS.search(translated_query)):
-                        answer = engine.llm.generate(query, result, history=earlier_messages) if result.products else None
+                    elif result.products:
+                        # Generate every product-search reply from retrieved catalogue context.
+                        # The formatter still shows product cards alongside the grounded answer.
+                        answer = engine.llm.generate(query, result, history=earlier_messages)
                     else:
                         answer = None
                     if missing_item_type or missing_brand:
