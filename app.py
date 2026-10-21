@@ -459,6 +459,29 @@ def response_text(result, answer, query):
     )
 
 
+def refresh_saved_results(messages, catalog):
+    """Rehydrate persisted product cards from the active catalogue, dropping stale rows."""
+    for message in messages:
+        payload = message.get("result") or {}
+        stale = False
+        for key in ("products", "suggestions"):
+            saved = payload.get(key) or []
+            refreshed = []
+            for product in saved:
+                current = catalog.by_id.get(product.get("id"))
+                if current is None:
+                    stale = True
+                else:
+                    refreshed.append(current)
+            if len(refreshed) != len(saved):
+                payload[key] = refreshed
+        if stale and message.get("role") == "assistant":
+            message["content"] = (
+                "These saved product results came from an older catalogue. "
+                "Please search again to see current product photos, prices, and reviews."
+            )
+
+
 try:
     engine = get_engine()
 except Exception as exc:
@@ -474,6 +497,7 @@ if "conversation_id" not in st.session_state:
         st.query_params["conversation_id"] = conversation_id
     st.session_state["conversation_id"] = conversation_id
     st.session_state["messages"] = memory.load_messages(conversation_id)
+    refresh_saved_results(st.session_state["messages"], engine.catalog)
 
 top_left, top_right = st.columns([7, 1])
 with top_right:
