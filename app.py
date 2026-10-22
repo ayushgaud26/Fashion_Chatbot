@@ -484,11 +484,9 @@ def response_text(result, answer, query):
         return answer.text
     if answer is not None and answer.error:
         if result.method == "brand_guidance":
-            return ("I found catalogue examples across brands. The AI response service is temporarily unavailable, "
-                    "so I’m showing those catalogue products directly.")
+            return "Here are catalogue examples across brands, with their listed details below."
         count = result.total_matches or len(result.products)
-        return (f"I found {count} matching products in the catalogue. "
-                "The AI response service is temporarily unavailable, so I’m showing the catalogue results directly.")
+        return f"I found {count} matching products in the catalogue. Here are the results."
     if result.method == "follow_up":
         return localized(
             query,

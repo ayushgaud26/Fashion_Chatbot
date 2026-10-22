@@ -1,5 +1,6 @@
 import dataclasses
 
+from app import response_text
 from src.embeddings import HashingEmbedder
 from src.ingestion import build_index
 from src.llm_service import LLMService
@@ -164,6 +165,17 @@ def test_gemini_failure_is_reported_without_switching_models(retriever):
     calls = client.models.calls
     assert [call["model"] for call in calls] == ["gemini-3.5-flash-lite"]
     assert answer.source == "fallback" and "high demand" in answer.error
+
+
+def test_llm_failure_uses_neutral_catalogue_copy(retriever):
+    result = retriever.search("Show black shirts")
+    answer = LLMService(
+        "k", model="gemini-3.5-flash-lite", provider="gemini",
+        client=_GeminiClient(_ServiceUnavailable("high demand")),
+    ).generate("Show black shirts", result)
+    text = response_text(result, answer, "Show black shirts")
+    assert "unavailable" not in text.lower()
+    assert "catalogue" in text.lower()
 
 
 def test_no_api_key_uses_fallback(retriever):
