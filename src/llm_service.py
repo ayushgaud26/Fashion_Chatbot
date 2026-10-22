@@ -1,4 +1,4 @@
-"""Grounded answer generation with an OpenAI chat model, plus a guarded fallback."""
+"""Grounded answer generation with Gemini or OpenAI, plus a guarded fallback."""
 from __future__ import annotations
 
 import json
@@ -21,6 +21,9 @@ SYSTEM_PROMPT = (
     "When comparing products, compare only attributes present in the supplied records. Do not declare an "
     "objective winner when the catalogue has no quality, comfort, durability, or review data; explain what "
     "can be compared and ask what matters most to the user. "
+    "For product searches, recommend no more than three retrieved products and include only useful supported "
+    "facts such as price, material, size, fit, and rating. Do not output product URLs; product cards already "
+    "provide links. Only include an ID if the user explicitly asks for one, copied exactly from its field. "
     "Do not claim that you have identified a user's personal style or visually recognized an image unless the "
     "relevant functionality has actually been implemented."
 )
@@ -48,7 +51,7 @@ def build_context(result: RetrievalResult, max_items: int = 15) -> str:
         fields = ("id", "productDisplayName", "brand", "gender", "masterCategory", "subCategory", "articleType",
                   "baseColour", "material", "size", "sizeFit", "price", "originalPrice", "discountPercentage",
                   "currency", "rating", "reviewCount", "availability", "comparisonFacts", "customerSignals",
-                  "productUrl", "retailer")
+                  "retailer")
         lines.append(json.dumps({k: p[k] for k in fields if p.get(k) is not None}, ensure_ascii=False))
     return "\n".join(lines)
 
@@ -77,7 +80,7 @@ def unknown_ids_in(text: str, result: RetrievalResult, question: str) -> list[st
 
 class LLMService:
     def __init__(self, api_key: str | None, model: str = "gpt-4o-mini", temperature: float = 0.1,
-                 client=None, max_context_items: int = 12, timeout: float = 15.0,
+                 client=None, max_context_items: int = 8, timeout: float = 14.0,
                  provider: str = "openai"):
         self.api_key, self.model, self.temperature = api_key, model, temperature
         self.provider = provider
@@ -90,14 +93,28 @@ class LLMService:
 
     def _get_client(self):
         if self._client is None:
-            from openai import OpenAI
-            # Keep retries under our control for every provider. The OpenAI SDK's
-            # default retries can silently add multiple timeout windows before
-            # generate() gets a chance to apply its bounded same-model retry.
-            options = {"api_key": self.api_key, "timeout": self.timeout, "max_retries": 0}
             if self.provider == "gemini":
-                options["base_url"] = "https://generativelanguage.googleapis.com/v1beta/openai/"
-            self._client = OpenAI(**options)
+                from google import genai
+                from google.genai import types
+
+                self._client = genai.Client(
+                    api_key=self.api_key,
+                    http_options=types.HttpOptions(
+                        timeout=int(self.timeout * 1000),
+                        retry_options=types.HttpRetryOptions(
+                            # Two total attempts, with a brief exponential backoff.
+                            attempts=2,
+                            initial_delay=0.5,
+                            max_delay=1.0,
+                            exp_base=2.0,
+                            jitter=0.2,
+                            http_status_codes=[408, 429, 500, 502, 503, 504],
+                        ),
+                    ),
+                )
+            else:
+                from openai import OpenAI
+                self._client = OpenAI(api_key=self.api_key, timeout=self.timeout, max_retries=0)
         return self._client
 
 
@@ -120,53 +137,46 @@ class LLMService:
         history_context = "\n".join(history_lines) or "No earlier conversation."
         language_instruction = (
             "Always reply in clear, natural English, regardless of the language used in the question. "
-            "Keep exact product names, brand names, prices, sizes, and URLs as they appear in the catalogue."
+            "Keep exact product names, brand names, prices, sizes, and other catalogue facts as they appear. "
+            "Never include URLs; include IDs only when explicitly requested."
         )
-        request_options = {}
-        if self.provider == "gemini":
-            request_options["extra_body"] = {
-                "extra_body": {"google": {"thinking_config": {"thinking_level": "minimal"}}}
-            }
-        messages = [
-            {"role": "system", "content": f"{SYSTEM_PROMPT} {language_instruction}"},
-            {"role": "user", "content": (f"Recent conversation:\n{history_context}\n\n"
-                                             f"Current question: {question}\n\n"
-                                             f"{build_context(result, self.max_context_items)}")},
-        ]
-        client = self._get_client()
+        system_instruction = f"{SYSTEM_PROMPT} {language_instruction}"
+        user_content = (f"Recent conversation:\n{history_context}\n\n"
+                        f"Current question: {question}\n\n"
+                        f"{build_context(result, self.max_context_items)}")
         response_model = self.model
         try:
-            resp = client.chat.completions.create(
-                model=response_model, temperature=self.temperature, max_tokens=450,
-                messages=messages, **request_options,
-            )
-        except Exception as exc:  # network, auth, rate limit, malformed response...
-            status = getattr(exc, "status_code", None)
-            transient = (status == 429 or (isinstance(status, int) and 500 <= status <= 599)
-                         or type(exc).__name__ in {"APITimeoutError", "APIConnectionError"})
-            if self.provider == "gemini" and transient:
-                # Retry only the selected model once for a transient service/network
-                # failure. At 15 seconds per attempt this bounds model wait to ~30s.
-                log.warning("Gemini model returned %s; retrying the same model once", status)
-                try:
-                    resp = client.chat.completions.create(
-                        model=response_model, temperature=self.temperature, max_tokens=450,
-                        messages=messages, **request_options,
-                    )
-                except Exception as retry_exc:
-                    log.warning("Gemini same-model retry failed: %s", type(retry_exc).__name__)
-                    return LLMAnswer(None, "fallback", error=(
-                        f"LLM unavailable after same-model retry ({type(retry_exc).__name__}: "
-                        f"{self._redact(str(retry_exc))[:160]})"
-                    ))
+            client = self._get_client()
+            if self.provider == "gemini":
+                resp = client.models.generate_content(
+                    model=response_model,
+                    contents=user_content,
+                    config={
+                        "system_instruction": system_instruction,
+                        "temperature": self.temperature,
+                        "max_output_tokens": 360,
+                        "thinking_config": {"thinking_level": "minimal"},
+                    },
+                )
+                text = (resp.text or "").strip()
             else:
-                log.warning("LLM call failed: %s", type(exc).__name__)
-                return LLMAnswer(None, "fallback", error=f"LLM unavailable ({type(exc).__name__}: {self._redact(str(exc))[:160]})")
-        try:
-            text = (resp.choices[0].message.content or "").strip()
+                resp = client.chat.completions.create(
+                    model=response_model,
+                    temperature=self.temperature,
+                    max_tokens=360,
+                    messages=[
+                        {"role": "system", "content": system_instruction},
+                        {"role": "user", "content": user_content},
+                    ],
+                )
+                text = (resp.choices[0].message.content or "").strip()
         except Exception as exc:  # network, auth, rate limit, malformed response...
-            log.warning("LLM call failed: %s", type(exc).__name__)
-            return LLMAnswer(None, "fallback", error=f"LLM unavailable ({type(exc).__name__}: {self._redact(str(exc))[:160]})")
+            status = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+            log.warning("LLM call failed: provider=%s status=%s error=%s",
+                        self.provider, status, type(exc).__name__)
+            return LLMAnswer(None, "fallback", error=(
+                f"LLM unavailable ({type(exc).__name__}: {self._redact(str(exc))[:160]})"
+            ))
         if not text:
             return LLMAnswer(None, "fallback", error="LLM returned an empty answer")
         bad = unknown_ids_in(text, result, question)

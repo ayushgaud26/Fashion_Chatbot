@@ -7,5 +7,6 @@ sentence-transformers>=3.0
 chromadb>=0.5
 streamlit>=1.50
 openai>=1.40
+google-genai>=1.0
 python-dotenv>=1.0
 pytest>=8.0

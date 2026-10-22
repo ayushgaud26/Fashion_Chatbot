@@ -67,6 +67,24 @@ class _Client:
         self.chat = type("C", (), {"completions": _Completions(behaviour)})()
 
 
+class _GeminiResponse:
+    def __init__(self, text): self.text = text
+
+
+class _GeminiModels:
+    def __init__(self, behaviour): self.behaviour, self.calls = behaviour, []
+    def generate_content(self, **kw):
+        self.calls.append(kw)
+        behaviour = self.behaviour.pop(0) if isinstance(self.behaviour, list) else self.behaviour
+        if isinstance(behaviour, Exception):
+            raise behaviour
+        return _GeminiResponse(behaviour)
+
+
+class _GeminiClient:
+    def __init__(self, behaviour): self.models = _GeminiModels(behaviour)
+
+
 class _ServiceUnavailable(RuntimeError):
     status_code = 503
 
@@ -92,39 +110,53 @@ def test_llm_api_failure_falls_back(retriever):
     assert all(str(i) in out.markdown for i in res.ids[:10])
 
 
-def test_gemini_503_retries_same_model_once(retriever):
+def test_gemini_answer_uses_configured_model_and_catalogue_context(retriever):
     res = retriever.search("Show black shirts")
-    client = _Client([_ServiceUnavailable("high demand"), "Recovered grounded answer."])
+    client = _GeminiClient("Recovered grounded answer.")
     answer = LLMService(
         "k", model="gemini-3.5-flash-lite", provider="gemini",
         client=client,
     ).generate("Show black shirts", res)
-    calls = client.chat.completions.calls
-    assert [call["model"] for call in calls] == ["gemini-3.5-flash-lite"] * 2
+    calls = client.models.calls
+    assert [call["model"] for call in calls] == ["gemini-3.5-flash-lite"]
+    assert "Catalogue records" in calls[0]["contents"]
+    assert "productUrl" not in calls[0]["contents"]
     assert answer.source == "llm" and answer.model == "gemini-3.5-flash-lite"
 
 
-def test_gemini_timeout_retries_same_model_once(retriever):
+def test_gemini_client_configures_bounded_sdk_backoff(monkeypatch):
+    import sys
+    import types
+
+    captured = {}
+    fake_google = types.ModuleType("google")
+    fake_genai = types.ModuleType("google.genai")
+    fake_genai_types = types.ModuleType("google.genai.types")
+    fake_genai_types.HttpRetryOptions = lambda **kw: kw
+    fake_genai_types.HttpOptions = lambda **kw: kw
+    fake_genai.Client = lambda **kw: captured.update(kw) or object()
+    fake_genai.types = fake_genai_types
+    fake_google.genai = fake_genai
+    monkeypatch.setitem(sys.modules, "google", fake_google)
+    monkeypatch.setitem(sys.modules, "google.genai", fake_genai)
+    monkeypatch.setitem(sys.modules, "google.genai.types", fake_genai_types)
+
+    client = LLMService("k", model="gemini-3.5-flash-lite", provider="gemini")._get_client()
+    retry = captured["http_options"]["retry_options"]
+    assert client is not None
+    assert retry["attempts"] == 2
+    assert retry["http_status_codes"] == [408, 429, 500, 502, 503, 504]
+
+
+def test_gemini_failure_is_reported_without_switching_models(retriever):
     res = retriever.search("Show black shirts")
-    timeout_error = type("APITimeoutError", (RuntimeError,), {})("request timed out")
-    client = _Client([timeout_error, "Recovered grounded answer."])
+    client = _GeminiClient(_ServiceUnavailable("high demand"))
     answer = LLMService(
         "k", model="gemini-3.5-flash-lite", provider="gemini", client=client,
     ).generate("Show black shirts", res)
-    calls = client.chat.completions.calls
-    assert [call["model"] for call in calls] == ["gemini-3.5-flash-lite"] * 2
-    assert answer.source == "llm" and answer.model == "gemini-3.5-flash-lite"
-
-
-def test_gemini_same_model_retry_is_bounded(retriever):
-    res = retriever.search("Show black shirts")
-    client = _Client([_ServiceUnavailable("high demand"), _ServiceUnavailable("still busy")])
-    answer = LLMService(
-        "k", model="gemini-3.5-flash-lite", provider="gemini", client=client,
-    ).generate("Show black shirts", res)
-    calls = client.chat.completions.calls
-    assert [call["model"] for call in calls] == ["gemini-3.5-flash-lite"] * 2
-    assert answer.source == "fallback" and "after same-model retry" in answer.error
+    calls = client.models.calls
+    assert [call["model"] for call in calls] == ["gemini-3.5-flash-lite"]
+    assert answer.source == "fallback" and "high demand" in answer.error
 
 
 def test_no_api_key_uses_fallback(retriever):

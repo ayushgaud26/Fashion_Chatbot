@@ -6,7 +6,7 @@ Arrow file ──► data_loader ──► preprocessing ──► Catalog (in-m
                     │                └─► IndexDoc (text + metadata + hash) ─► embeddings ─► ChromaDB (persistent)
                     └─► ImageStore (lazy image bytes, display only)                          │
 User question ─► retrieval.HybridRetriever ──(1 ID, 2 exact name, 3 filters, 4 semantic)──────┘
-                    └─► RetrievalResult ─► llm_service (OpenAI, grounded) ─► response_formatter ─► Streamlit
+                    └─► RetrievalResult ─► llm_service (Gemini SDK / optional OpenAI, grounded) ─► response_formatter ─► Streamlit
                                               └─ on error / no key / bad IDs ─► catalogue fallback
 ```
 
@@ -40,8 +40,9 @@ clause, so semantic ranking can only reorder products that already satisfy the c
 product name are boosted. Without filters, pure semantic results are capped by `SEMANTIC_TOP_K` and `SEMANTIC_MAX_DISTANCE`
 and are labelled as suggestions, not verified matches.
 
-**LLM generation** (`llm_service.py`): system prompt forbids invention; temperature 0.1; ≤15 records as JSON context;
-errors are caught and API keys redacted; if the answer mentions an ID outside the retrieved set it is rejected.
+**LLM generation** (`llm_service.py`): system prompt forbids invention; temperature 0.1; up to 8 records as JSON context;
+Gemini uses Google's SDK with bounded exponential retries for transient API errors. Errors are caught and API keys redacted;
+if the answer mentions an ID outside the retrieved set it is rejected.
 
 **Response formatting & fallback** (`response_formatter.py`): every answer is labelled either *AI-generated* or
 *Catalogue-search fallback*; no-match/clarification messages are deterministic; source product IDs are always listed;
