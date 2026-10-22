@@ -39,7 +39,7 @@ Run the test suite with `python -m pytest -q`. The demo query report can be rege
 | Variable | Purpose |
 |---|---|
 | `LLM_PROVIDER` | `gemini`, `openai`, or `auto` |
-| `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL` | Gemini credentials and models. On transient Gemini 429/5xx errors, the fallback model is tried automatically. |
+| `GEMINI_API_KEY` | Gemini credentials. Gemini responses use `gemini-3.5-flash-lite` with no model fallback. |
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | Optional OpenAI credentials and model |
 | `LLM_TEMPERATURE` | Response temperature |
 | `EMBEDDING_BACKEND` | `auto`, `sentence-transformers`, or offline `hashing` fallback |

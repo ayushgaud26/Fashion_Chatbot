@@ -47,7 +47,6 @@ class Config:
     semantic_max_distance: float
     llm_provider: str
     llm_model: str
-    llm_fallback_model: str | None
     llm_temperature: float
     llm_api_key: str | None  # read from the environment only
 
@@ -63,7 +62,8 @@ def get_config() -> Config:
         llm_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     else:
         llm_api_key = os.getenv("GEMINI_API_KEY") or None
-        llm_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+        # Keep Gemini generation on the single model chosen for this app.
+        llm_model = "gemini-3.5-flash-lite"
     dataset_path = _path("DATASET_PATH", "data/myntra/myntra-dataset-sample-main/Myntra products .csv")
     preferred_csv = PROJECT_ROOT / "data" / "myntra" / "myntra-dataset-sample-main" / "Myntra products .csv"
     # The Arrow sample has blurry thumbnails and lacks prices/review counts. If a
@@ -86,9 +86,6 @@ def get_config() -> Config:
         semantic_max_distance=_float("SEMANTIC_MAX_DISTANCE", 0.8),
         llm_provider=provider,
         llm_model=llm_model,
-        llm_fallback_model=(os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.8-flash").strip()
-                            or "gemini-3.8-flash")
-        if provider == "gemini" else None,
         llm_temperature=_float("LLM_TEMPERATURE", 0.1),
         llm_api_key=llm_api_key,
     )

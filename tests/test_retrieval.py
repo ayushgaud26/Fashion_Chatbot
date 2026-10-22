@@ -92,31 +92,16 @@ def test_llm_api_failure_falls_back(retriever):
     assert all(str(i) in out.markdown for i in res.ids[:10])
 
 
-def test_gemini_503_retries_with_fallback_model(retriever):
+def test_gemini_503_does_not_switch_models(retriever):
     res = retriever.search("Show black shirts")
-    client = _Client([_ServiceUnavailable("high demand"), "Grounded catalogue answer."])
+    client = _Client(_ServiceUnavailable("high demand"))
     answer = LLMService(
         "k", model="gemini-3.5-flash-lite", provider="gemini",
-        fallback_model="gemini-3.8-flash", client=client,
+        client=client,
     ).generate("Show black shirts", res)
     calls = client.chat.completions.calls
-    assert [call["model"] for call in calls] == ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
-    assert answer.source == "llm" and answer.model == "gemini-3.8-flash"
-
-
-def test_gemini_503_stops_after_one_fallback_model(retriever):
-    res = retriever.search("Show black shirts")
-    client = _Client([
-        _ServiceUnavailable("primary busy"),
-        _ServiceUnavailable("first fallback busy"),
-    ])
-    answer = LLMService(
-        "k", model="gemini-3.5-flash-lite", provider="gemini",
-        fallback_model="gemini-3.8-flash", client=client,
-    ).generate("Show black shirts", res)
-    calls = client.chat.completions.calls
-    assert [call["model"] for call in calls] == ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
-    assert answer.source == "fallback" and "models unavailable" in answer.error
+    assert [call["model"] for call in calls] == ["gemini-3.5-flash-lite"]
+    assert answer.source == "fallback" and "LLM unavailable" in answer.error
 
 
 def test_no_api_key_uses_fallback(retriever):

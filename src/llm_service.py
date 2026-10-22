@@ -77,11 +77,10 @@ def unknown_ids_in(text: str, result: RetrievalResult, question: str) -> list[st
 
 class LLMService:
     def __init__(self, api_key: str | None, model: str = "gpt-4o-mini", temperature: float = 0.1,
-                 client=None, max_context_items: int = 12, timeout: float = 5.0,
-                 provider: str = "openai", fallback_model: str | None = None):
+                 client=None, max_context_items: int = 12, timeout: float = 10.0,
+                 provider: str = "openai"):
         self.api_key, self.model, self.temperature = api_key, model, temperature
         self.provider = provider
-        self.fallback_model = fallback_model
         self.max_context_items, self.timeout = max_context_items, timeout
         self._client = client
 
@@ -95,8 +94,7 @@ class LLMService:
             options = {"api_key": self.api_key, "timeout": self.timeout}
             if self.provider == "gemini":
                 options["base_url"] = "https://generativelanguage.googleapis.com/v1beta/openai/"
-                # Let the service-level model fallback handle transient errors
-                # immediately instead of spending the timeout retrying one model.
+                # Use only the configured Gemini model; SDK retries add latency.
                 options["max_retries"] = 0
             self._client = OpenAI(**options)
         return self._client
@@ -142,36 +140,8 @@ class LLMService:
                 messages=messages, **request_options,
             )
         except Exception as exc:  # network, auth, rate limit, malformed response...
-            status = getattr(exc, "status_code", None)
-            transient = status == 429 or (isinstance(status, int) and 500 <= status <= 599)
-            fallback_models = []
-            if self.fallback_model and self.fallback_model != self.model:
-                fallback_models.append(self.fallback_model)
-            # One bounded backup attempt keeps transient provider failures from
-            # turning a short request into several serial model timeouts.
-            if not (self.provider == "gemini" and fallback_models and transient):
-                log.warning("LLM call failed: %s", type(exc).__name__)
-                return LLMAnswer(None, "fallback", error=f"LLM unavailable ({type(exc).__name__}: {self._redact(str(exc))[:160]})")
-            log.warning("Primary Gemini model returned %s; trying fallback models", status)
-            last_error = exc
-            resp = None
-            for fallback_model in fallback_models:
-                response_model = fallback_model
-                try:
-                    resp = client.chat.completions.create(
-                        model=response_model, temperature=self.temperature, max_tokens=450,
-                        messages=messages, **request_options,
-                    )
-                    break
-                except Exception as fallback_exc:
-                    last_error = fallback_exc
-                    fallback_status = getattr(fallback_exc, "status_code", None)
-                    log.warning("Gemini fallback model %s failed with %s", fallback_model, fallback_status or type(fallback_exc).__name__)
-            if resp is None:
-                return LLMAnswer(None, "fallback", error=(
-                    f"Primary and fallback Gemini models unavailable ({type(last_error).__name__}: "
-                    f"{self._redact(str(last_error))[:160]})"
-                ))
+            log.warning("LLM call failed: %s", type(exc).__name__)
+            return LLMAnswer(None, "fallback", error=f"LLM unavailable ({type(exc).__name__}: {self._redact(str(exc))[:160]})")
         try:
             text = (resp.choices[0].message.content or "").strip()
         except Exception as exc:  # network, auth, rate limit, malformed response...
