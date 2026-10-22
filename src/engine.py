@@ -47,6 +47,7 @@ def load_engine(cfg: Config | None = None, embedder=None, auto_index: bool = Tru
         indexed_now = rep.added + rep.updated
     catalog = Catalog(records)
     retriever = HybridRetriever(catalog, store, cfg.max_results, cfg.semantic_top_k, cfg.semantic_max_distance)
-    llm = LLMService(cfg.llm_api_key, cfg.llm_model, cfg.llm_temperature, provider=cfg.llm_provider)
+    llm = LLMService(cfg.llm_api_key, cfg.llm_model, cfg.llm_temperature,
+                     provider=cfg.llm_provider, fallback_model=cfg.llm_fallback_model)
     return Engine(cfg, catalog, ImageStore(table if hasattr(table, "column_names") else None, records), embedder, store, retriever, llm,
                   prep.total_rows, prep.to_text(), indexed_now)

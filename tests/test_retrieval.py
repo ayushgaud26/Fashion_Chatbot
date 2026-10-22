@@ -58,12 +58,17 @@ class _Completions:
     def __init__(self, behaviour): self.behaviour, self.calls = behaviour, []
     def create(self, **kw):
         self.calls.append(kw)
-        if isinstance(self.behaviour, Exception):
-            raise self.behaviour
-        return _Resp(self.behaviour)
+        behaviour = self.behaviour.pop(0) if isinstance(self.behaviour, list) else self.behaviour
+        if isinstance(behaviour, Exception):
+            raise behaviour
+        return _Resp(behaviour)
 class _Client:
     def __init__(self, behaviour):
         self.chat = type("C", (), {"completions": _Completions(behaviour)})()
+
+
+class _ServiceUnavailable(RuntimeError):
+    status_code = 503
 
 
 def test_llm_answer_used_and_labelled(retriever):
@@ -85,6 +90,18 @@ def test_llm_api_failure_falls_back(retriever):
     out = compose(res, ans)
     assert "fallback" in out.markdown.lower() and "AI-generated" not in out.markdown
     assert all(str(i) in out.markdown for i in res.ids[:10])
+
+
+def test_gemini_503_retries_with_fallback_model(retriever):
+    res = retriever.search("Show black shirts")
+    client = _Client([_ServiceUnavailable("high demand"), "Grounded catalogue answer."])
+    answer = LLMService(
+        "k", model="gemini-3.5-flash-lite", provider="gemini",
+        fallback_model="gemini-3.8-flash", client=client,
+    ).generate("Show black shirts", res)
+    calls = client.chat.completions.calls
+    assert [call["model"] for call in calls] == ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
+    assert answer.source == "llm" and answer.model == "gemini-3.8-flash"
 
 
 def test_no_api_key_uses_fallback(retriever):

@@ -78,9 +78,10 @@ def unknown_ids_in(text: str, result: RetrievalResult, question: str) -> list[st
 class LLMService:
     def __init__(self, api_key: str | None, model: str = "gpt-4o-mini", temperature: float = 0.1,
                  client=None, max_context_items: int = 15, timeout: float = 60.0,
-                 provider: str = "openai"):
+                 provider: str = "openai", fallback_model: str | None = None):
         self.api_key, self.model, self.temperature = api_key, model, temperature
         self.provider = provider
+        self.fallback_model = fallback_model
         self.max_context_items, self.timeout = max_context_items, timeout
         self._client = client
 
@@ -94,6 +95,9 @@ class LLMService:
             options = {"api_key": self.api_key, "timeout": self.timeout}
             if self.provider == "gemini":
                 options["base_url"] = "https://generativelanguage.googleapis.com/v1beta/openai/"
+                # Let the service-level model fallback handle transient errors
+                # immediately instead of spending the timeout retrying one model.
+                options["max_retries"] = 0
             self._client = OpenAI(**options)
         return self._client
 
@@ -117,25 +121,45 @@ class LLMService:
             "Always reply in clear, natural English, regardless of the language used in the question. "
             "Keep exact product names, brand names, prices, sizes, and URLs as they appear in the catalogue."
         )
+        request_options = {}
+        if self.provider == "gemini":
+            request_options["extra_body"] = {
+                "extra_body": {"google": {"thinking_config": {"thinking_level": "minimal"}}}
+            }
+        messages = [
+            {"role": "system", "content": f"{SYSTEM_PROMPT} {language_instruction}"},
+            {"role": "user", "content": (f"Recent conversation:\n{history_context}\n\n"
+                                             f"Current question: {question}\n\n"
+                                             f"{build_context(result, self.max_context_items)}")},
+        ]
+        client = self._get_client()
+        response_model = self.model
         try:
-            request_options = {}
-            if self.provider == "gemini":
-                # Gemini 3 models support thinking controls through the OpenAI
-                # compatibility endpoint. Minimal thinking keeps this short,
-                # catalogue-grounded answer path responsive.
-                request_options["extra_body"] = {
-                    "extra_body": {
-                        "google": {"thinking_config": {"thinking_level": "minimal"}}
-                    }
-                }
-            resp = self._get_client().chat.completions.create(
-                model=self.model, temperature=self.temperature, max_tokens=600,
-                messages=[{"role": "system", "content": f"{SYSTEM_PROMPT} {language_instruction}"},
-                          {"role": "user", "content": (f"Recent conversation:\n{history_context}\n\n"
-                                                           f"Current question: {question}\n\n"
-                                                           f"{build_context(result, self.max_context_items)}")}],
-                **request_options,
+            resp = client.chat.completions.create(
+                model=response_model, temperature=self.temperature, max_tokens=600,
+                messages=messages, **request_options,
             )
+        except Exception as exc:  # network, auth, rate limit, malformed response...
+            status = getattr(exc, "status_code", None)
+            transient = status == 429 or (isinstance(status, int) and 500 <= status <= 599)
+            if not (self.provider == "gemini" and self.fallback_model
+                    and self.fallback_model != self.model and transient):
+                log.warning("LLM call failed: %s", type(exc).__name__)
+                return LLMAnswer(None, "fallback", error=f"LLM unavailable ({type(exc).__name__}: {self._redact(str(exc))[:160]})")
+            log.warning("Primary Gemini model returned %s; retrying with configured fallback model", status)
+            response_model = self.fallback_model
+            try:
+                resp = client.chat.completions.create(
+                    model=response_model, temperature=self.temperature, max_tokens=600,
+                    messages=messages, **request_options,
+                )
+            except Exception as fallback_exc:
+                log.warning("Fallback Gemini model failed: %s", type(fallback_exc).__name__)
+                return LLMAnswer(None, "fallback", error=(
+                    f"LLM unavailable ({type(fallback_exc).__name__}: "
+                    f"{self._redact(str(fallback_exc))[:160]})"
+                ))
+        try:
             text = (resp.choices[0].message.content or "").strip()
         except Exception as exc:  # network, auth, rate limit, malformed response...
             log.warning("LLM call failed: %s", type(exc).__name__)
@@ -145,4 +169,4 @@ class LLMService:
         bad = unknown_ids_in(text, result, question)
         if bad:
             return LLMAnswer(None, "fallback", error=f"LLM answer mentioned IDs not in the retrieved records ({', '.join(bad[:3])})")
-        return LLMAnswer(text, "llm", model=self.model)
+        return LLMAnswer(text, "llm", model=response_model)
