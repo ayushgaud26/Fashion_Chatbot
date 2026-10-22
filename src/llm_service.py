@@ -1,4 +1,4 @@
-"""Grounded answer generation with Gemini or OpenAI, plus a guarded fallback."""
+"""Gemini answer generation grounded in retrieved catalogue records."""
 from __future__ import annotations
 
 import json
@@ -13,6 +13,10 @@ log = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "You are a fashion product discovery assistant. Answer using only the supplied fashion catalogue records. "
+    "The retrieval notes explain whether records are exact matches or only suggestions. Never claim a suggestion "
+    "satisfies a requested filter unless the record and retrieval notes verify it. If no records were retrieved, "
+    "say that the catalogue has no matching records and ask the user to change the search; do not answer from "
+    "general knowledge. "
     "Never invent product names, IDs, colours, categories, sizes, brands, prices, discounts, stock levels, or "
     "availability. Distinguish retrieved facts from recommendations. If the dataset does not contain the "
     "requested information, say so. When presenting products, preserve their original names. Do not include "
@@ -48,9 +52,13 @@ def build_context(result: RetrievalResult, max_items: int = 15) -> str:
         lines.append(f"Filters applied: {json.dumps(result.filters)}")
     if result.unsupported:
         lines.append("The user asked about fields NOT in the dataset: " + ", ".join(result.unsupported))
+    if result.message:
+        lines.append(f"Retrieval message: {result.message}")
     if result.notes:
         lines.append("Notes: " + " ".join(result.notes))
     lines.append("Catalogue records (JSON, one per line):")
+    if not result.products:
+        lines.append("No catalogue records were retrieved.")
     for p in result.products[:max_items]:
         fields = ("id", "productDisplayName", "brand", "gender", "masterCategory", "subCategory", "articleType",
                   "baseColour", "material", "size", "sizeFit", "price", "originalPrice", "discountPercentage",
@@ -152,8 +160,6 @@ class LLMService:
     def generate(self, question: str, result: RetrievalResult, history: list[dict] | None = None) -> LLMAnswer:
         if not self.available:
             return LLMAnswer(None, "fallback", error=f"{self.provider.upper()} API key is not configured")
-        if not result.products:
-            return LLMAnswer(None, "fallback", error="no products to describe")
         history_lines = []
         # Keep enough turns to resolve follow-ups without sending a long transcript
         # on every request (which adds latency and can distract the model).

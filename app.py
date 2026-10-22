@@ -4,6 +4,7 @@ import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import escape
+from types import SimpleNamespace
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -406,8 +407,9 @@ def requested_missing_item_type(engine, query):
 def is_general_brand_question(engine, query):
     """Handle requests for a universal 'best brand' without inventing a ranking."""
     normalized = re.sub(r"\s+", " ", translate_query(query).lower()).strip()
-    if not re.search(r"\bbrands?\b", normalized) or not re.search(
-        r"\b(?:best|better|good|recommend|recommendation|suggest|which)\b", normalized
+    if not re.search(r"\bbrand(?:s|ed)?\b", normalized) or not re.search(
+        r"\b(?:best|better|good|top|popular|leading|recommend|recommendation|suggest|which|what|list|have|show|any|available)\b",
+        normalized,
     ):
         return False
     # Keep named-brand questions and comparisons on the existing catalogue/LLM path.
@@ -417,123 +419,318 @@ def is_general_brand_question(engine, query):
     return True
 
 
-def greeting_reply(query):
+def is_conversational(query):
+    """Routing only: a greeting/thanks/goodbye/refusal needs no catalogue lookup.
+
+    The reply itself is still written by Gemini; nothing here returns canned text.
+    """
     normalized = re.sub(r"\s+", " ", translate_query(query).strip())
-    if GOODBYES.fullmatch(normalized):
-        return localized(
-            query,
-            "Sure, I’ll stop here. Thank you for your time—have a nice day ahead! 👋",
-            "ठीक है, मैं यहीं रुकता हूँ। आपका समय देने के लिए धन्यवाद—आपका दिन शुभ हो! 👋",
-            "Theek hai, main yahin rukta hoon. Aapke time ke liye dhanyavaad—have a nice day ahead! 👋",
-        )
-    if ACKNOWLEDGEMENTS.fullmatch(normalized):
-        return localized(
-            query,
-            "You're welcome! Let me know if you'd like help finding anything else. 👋",
-            "आपका स्वागत है! किसी और चीज़ में मदद चाहिए तो बताइए। 👋",
-            "Aapka welcome! Kuch aur dhoondhne mein help chahiye toh bata dena. 👋",
-        )
-    if not GREETINGS.fullmatch(normalized):
+    return any(pattern.fullmatch(normalized)
+               for pattern in (GREETINGS, GOODBYES, ACKNOWLEDGEMENTS, DECLINES))
+
+
+BRAND_WORDS = re.compile(
+    r"\b(?:top|best|popular|leading|good|famous|most|which|what|whats|are|is|the|brands?|branded|in|for|of|from|"
+    r"do|does|u|you|have|has|show|me|list|any|available|give|tell|about|please|can|some|only|\d+)\b"
+)
+
+
+def brand_ranking_context(engine, query, previous_query, previous):
+    """'top 3 brands in jeans': rank brands inside the requested category from catalogue facts."""
+    normalized = translate_query(query).lower()
+    if not re.search(r"\bbrands?\b", normalized):
         return None
-    if re.search(THANKS_PATTERN, normalized, re.I):
-        return localized(
-            query,
-            "You're welcome! Thank you for your time—have a nice day ahead! 👋",
-            "आपका स्वागत है! आपका समय देने के लिए धन्यवाद—आपका दिन शुभ हो! 👋",
-            "Aapka welcome! Aapke time ke liye thank you—have a nice day ahead! 👋",
+    if not re.search(r"\b(?:top|best|popular|leading|most|good|famous)\b", normalized):
+        return None
+    scope = re.sub(r"\s+", " ", BRAND_WORDS.sub(" ", normalized)).strip(" ?!.,")
+    if not scope and previous and previous_query and not re.search(r"\bbrands?\b", previous_query, re.I):
+        scope = previous_query          # "top 3 brands" right after a product search
+    if not scope:
+        return None                     # no category given: handled by the general brand path
+    wanted = re.search(r"\btop\s+(\d+)\b", normalized)
+    top_n = min(int(wanted.group(1)), 10) if wanted else 5
+
+    found = engine.retriever.search(scope)
+    candidates = engine.catalog.filter(found.filters) if found.filters else found.products
+    if not candidates:
+        return RetrievalResult(
+            query=query, method="brand_ranking_no_match",
+            notes=[f"No catalogue products matched '{scope}', so no brands can be ranked for it."],
         )
-    if re.search(r"\bhow are(?: you)?\b", normalized, re.I):
-        return localized(
-            query,
-            "I'm doing well and ready to help you find fashion products. What are you looking for?",
-            "मैं बढ़िया हूँ और फैशन प्रोडक्ट ढूँढने में आपकी मदद के लिए तैयार हूँ। आप क्या ढूँढ रहे हैं?",
-            "Main badhiya hoon aur fashion products dhoondhne mein help ke liye ready hoon. Aap kya dhoondh rahe hain?",
-        )
-    if re.search(r"\b(?:what can you do|who are you)\b", normalized, re.I):
-        return localized(
-            query,
-            "Hi! I'm your friendly fashion assistant. I can find Myntra products and share their prices, ratings, sizes, and links.",
-            "नमस्ते! मैं आपका फैशन असिस्टेंट हूँ। मैं Myntra के प्रोडक्ट, कीमत, रेटिंग, साइज़ और लिंक ढूँढ सकता हूँ।",
-            "Namaste! Main aapka fashion assistant hoon. Main Myntra products, prices, ratings, sizes aur links dhoondh sakta hoon.",
-        )
-    return localized(
-        query,
-        "Hello! 👋 How can I help you find something today?",
-        "नमस्ते! 👋 आज मैं आपके लिए क्या ढूँढूँ?",
-        "Namaste! 👋 Aaj main aapke liye kya dhoondhun?",
+
+    stats = {}
+    for product in candidates:
+        brand = str(product.get("brand") or "").strip()
+        if not brand:
+            continue
+        entry = stats.setdefault(brand, {"n": 0, "rated": [], "reviews": 0, "prices": [], "best": None})
+        entry["n"] += 1
+        try:
+            rating = float(product.get("rating"))
+            reviews = int(product.get("reviewCount") or 0)
+            if rating > 0:
+                entry["rated"].append((rating, reviews))
+        except (TypeError, ValueError):
+            pass
+        entry["reviews"] += int(product.get("reviewCount") or 0)
+        try:
+            entry["prices"].append(float(product.get("price")))
+        except (TypeError, ValueError):
+            pass
+        best = entry["best"]
+        if best is None or float(product.get("rating") or 0) > float(best.get("rating") or 0):
+            entry["best"] = product
+
+    def avg_rating(entry):
+        # Same smoothing idea as rank_for_recommendation: few reviews shouldn't win on a lucky 4.8.
+        total = sum(r * max(c, 0) for r, c in entry["rated"])
+        count = sum(max(c, 0) for r, c in entry["rated"])
+        return (total + 4.0 * 100) / (count + 100) if entry["rated"] else 0.0
+
+    ranked = sorted(stats.items(), key=lambda kv: (avg_rating(kv[1]), kv[1]["n"]), reverse=True)[:top_n]
+    lines = []
+    for brand, entry in ranked:
+        price_text = (f"price range {min(entry['prices']):,.0f}-{max(entry['prices']):,.0f} INR"
+                      if entry["prices"] else "price unavailable")
+        rating_text = (f"review-weighted rating {avg_rating(entry):.2f}" if entry["rated"] else "no ratings")
+        lines.append(f"{brand}: {entry['n']} product(s), {rating_text}, {entry['reviews']:,} total reviews, {price_text}")
+    return RetrievalResult(
+        query=query, method="brand_ranking",
+        products=[entry["best"] for _, entry in ranked if entry["best"]],
+        total_matches=len(candidates), filters=found.filters,
+        notes=[f"The user wants the top {top_n} brands for '{scope}'. {len(candidates)} matching catalogue "
+               f"products were analysed. Brand ranking (best first, by review-weighted rating, then product "
+               f"count): " + " | ".join(lines),
+               "Present the brands in this order with these catalogue facts. State that the ranking comes only "
+               "from this catalogue sample, not from the whole market. The products supplied are each brand's "
+               "best-rated item."],
     )
 
 
-def decline_reply(query):
-    """Treat a standalone refusal as conversation, not a product search query."""
-    normalized = re.sub(r"\s+", " ", translate_query(query).strip())
-    if not DECLINES.fullmatch(normalized):
-        return None
-    return localized(
-        query,
-        "No problem. What product or category would you like to look for instead?",
-        "कोई बात नहीं। आप इसके बजाय कौन-सा प्रोडक्ट या कैटेगरी ढूँढना चाहेंगे?",
-        "Koi baat nahi. Aap iske badle kaunsa product ya category dekhna chahenge?",
-    )
+def _retrieve_context(engine, query, earlier_messages, refers_previous=False):
+    """Retrieval step only. Returns (RetrievalResult, alternatives).
 
+    Nothing user-facing is written here. Every situation (no match, missing brand,
+    clarification needed, small talk...) is described in ``result.notes`` so Gemini
+    can phrase the reply from facts instead of the app using canned strings.
+    """
+    previous = previous_products(earlier_messages)
+    previous_query = previous_user_query(earlier_messages)
 
-def localized(query, english, hindi, hinglish):
-    # Always use English for assistant replies, regardless of the user's input language.
-    return english
+    if is_conversational(query):
+        return RetrievalResult(
+            query=query, method="conversation",
+            notes=["Conversational message (greeting, thanks, goodbye or refusal). "
+                   "No catalogue retrieval was needed. Reply briefly and, if suitable, "
+                   "invite the user to search for a fashion product."],
+        ), []
 
+    ranking = brand_ranking_context(engine, query, previous_query, previous)
+    if ranking is not None:
+        return ranking, []
 
-def no_match_reply(query, suggestions, missing_brand=None, filters=None):
-    if missing_brand:
-        return (f"I couldn’t find **{missing_brand}** in this catalogue, but I can suggest these similar items:"
-                if suggestions else
-                f"I couldn’t find **{missing_brand}** in this catalogue. Try another brand or product type and I’ll look again.")
-    if filters and suggestions and filters.get("usage"):
-        usage = ", ".join(str(value) for value in filters["usage"])
-        item_type = next((str(value) for field in ("subCategory", "articleType")
-                          for value in filters.get(field, [])), "requested product type")
-        return (f"The catalogue has no {usage.lower()}-tagged {item_type.lower()}. "
-                f"Here are {item_type.lower()} from the catalogue; their {usage.lower()} style isn't verified.")
-    if filters and suggestions:
-        return "Oops! I couldn’t find an exact match for all your filters. Here are other options that keep your requested product type; they may differ on colour, size, material, or brand."
-    if filters:
-        return "Oops! I couldn’t find a product matching all your filters in this catalogue. Try changing one filter."
-    return ("I couldn’t find an exact match for that request in this catalogue, but I can suggest these similar items:"
-            if suggestions else
-            "I couldn’t find a close match in this catalogue. Try another brand, product type, colour, or budget and I’ll look again.")
+    if is_general_brand_question(engine, query):
+        best_example_by_brand = {}
+        for product in engine.catalog.records:
+            brand = str(product.get("brand") or "").strip()
+            if not brand:
+                continue
+            score = (float(product.get("rating") or 0), int(product.get("reviewCount") or 0))
+            current = best_example_by_brand.get(brand)
+            if current is None or score > current[0]:
+                best_example_by_brand[brand] = (score, product)
+        examples = [product for _, product in sorted(
+            best_example_by_brand.values(), key=lambda entry: entry[0], reverse=True
+        )[:15]]
+        brand_counts = {}
+        for product in engine.catalog.records:
+            brand = str(product.get("brand") or "").strip()
+            if brand:
+                brand_counts[brand] = brand_counts.get(brand, 0) + 1
+        brand_list = ", ".join(f"{b} ({n})" for b, n in sorted(brand_counts.items(), key=lambda kv: (-kv[1], kv[0])))
+        return RetrievalResult(
+            query=query, method="brand_guidance", products=examples, total_matches=len(examples),
+            notes=["Examples selected from catalogue records with available ratings and review counts; "
+                   "this is not an overall brand ranking.",
+                   f"All brands in the catalogue with record counts: {brand_list}"],
+        ), []
 
+    budget_context = filter_previous_request_by_budget(engine, previous_query, query, previous)
+    if budget_context:
+        result, alternatives, amount = budget_context
+        if result.products:
+            return result, []
+        result.notes = list(result.notes) + [
+            f"Nothing from the previous request is within {amount:,.0f} INR. "
+            "The alternatives are the closest-priced items of the same type and may be over budget."
+        ]
+        return result, alternatives
 
-def response_text(result, answer, query):
-    if answer is not None and answer.source == "llm":
-        return f"**🤖 AI-generated answer (grounded in the catalogue):**\n\n{answer.text}"
-    if answer is not None and answer.error:
-        detail = answer.error
-        if "not configured" in detail.lower():
-            return "Gemini API key is missing. Add GEMINI_API_KEY in Streamlit app Secrets to generate an answer."
-        if any(marker in detail.lower() for marker in ("permissiondenied", "unauthorized", "401", "403")):
-            return "Gemini rejected the configured API key. Replace GEMINI_API_KEY in Streamlit app Secrets, then restart the app."
-        count = result.total_matches or len(result.products)
-        return f"Gemini could not generate an answer ({detail}). {count} catalogue matches are shown below."
-    if result.method == "follow_up":
-        return localized(
-            query,
-            "Here are the products we were discussing. I can compare their prices, ratings, materials, and other listed details.",
-            "ये वही प्रोडक्ट हैं जिनकी हम बात कर रहे थे। मैं इनकी कीमत, रेटिंग और उपलब्ध जानकारी की तुलना कर सकता हूँ।",
-            "Ye wahi products hain jinki hum baat kar rahe the. Main inki prices, ratings aur available details compare kar sakta hoon.",
-        )
-    if result.method == "exact_id":
-        return localized(query, "Here are the product details from the catalogue.",
-                         "कैटलॉग में इस प्रोडक्ट की जानकारी यहाँ है।",
-                         "Catalogue mein is product ki details yahan hain.")
-    count = result.total_matches or len(result.products)
+    effective_query = query
+    if previous:
+        effective_query = combine_filter_refinement(previous_query, query, engine.catalog.vocab)
+    result = engine.retriever.search(effective_query)
+    translated_query = translate_query(query)
+    one_product_request = bool(re.search(
+        r"\b(?:suggest|recommend|show|give|pick)\s+me\s+one\b", query, re.I
+    ))
+    contextual_follow_up = (CONTEXTUAL_FOLLOW_UP.search(query)
+                            or CONTEXTUAL_FOLLOW_UP.search(translated_query))
+
+    if previous and (contextual_follow_up or refers_previous):
+        def _price(product):
+            try:
+                return float(product.get("price"))
+            except (TypeError, ValueError):
+                return float("inf")
+
+        follow_up_products = previous
+        if re.search(r"\b(?:cheap|cheaper|cheapest|lowest|least expensive|affordable|lower price)\b", query, re.I):
+            follow_up_products = sorted(previous, key=_price)
+        elif re.search(r"\b(?:expensive|costliest|priciest|highest|costlier|higher price)\b", query, re.I):
+            follow_up_products = sorted(previous, key=lambda p: -_price(p) if _price(p) != float("inf") else 0)
+        elif re.search(r"\b(?:best|better|recommend|recommendation)\b", query, re.I):
+            follow_up_products = rank_for_recommendation(previous)
+        if one_product_request:
+            follow_up_products = rank_for_recommendation(previous)[:1]
+        return RetrievalResult(
+            query=query, method="follow_up", products=follow_up_products,
+            total_matches=len(follow_up_products),
+            notes=["The user is referring to the products from the previous turn; "
+                   "compare or answer using only these products."],
+        ), []
+
+    if one_product_request:
+        return RetrievalResult(
+            query=query, method="clarification",
+            notes=["The user asked for one suggestion but no product type is known. "
+                   "Ask which product type they want. Do not recommend anything."],
+        ), []
+
     if result.products:
-        return ("I couldn’t generate the AI answer for this request. The product cards below are catalogue matches, "
-                "not an AI recommendation. Please try again in a moment.")
-    return localized(
-        query,
-        f"I found {count} matching items. Here are some options from the catalogue.",
-        f"आपकी रिक्वेस्ट से मेल खाते {count} प्रोडक्ट मिले। कुछ विकल्प नीचे हैं।",
-        f"Aapki request se match karte {count} products mile. Kuch options neeche hain.",
-    )
+        return result, []
+
+    # Hard filters (type, colour, budget, rating...) matched nothing. Never ignore them:
+    # relax only the optional ones and keep the product type, then let Gemini explain.
+    if result.filters:
+        alternatives = find_related_products(engine, result, query)
+        result.notes = list(result.notes) + ["No catalogue product matched all of the user's filters."]
+        return result, alternatives
+
+    # No recognisable filter: fall back to pure semantic search and let Gemini decide
+    # from the retrieved records whether they really answer the question.
+    try:
+        nearest = engine.store.query(query, 10, None)
+        semantic = [engine.catalog.by_id[pid] for pid, _ in nearest if pid in engine.catalog.by_id]
+    except Exception:
+        logging.exception("Semantic fallback failed")
+        semantic = []
+    if semantic:
+        return RetrievalResult(
+            query=query, method="semantic_fallback", products=semantic, total_matches=len(semantic),
+            notes=([result.message] if result.message else []) + [
+                   "No exact filter match, so these are the nearest catalogue records by meaning. "
+                   "They may not match the request. If they do not, say the catalogue has no such item "
+                   "and do not present them as matches. Mention only brands and product types that "
+                   "appear in these records."],
+        ), []
+    result.notes = list(result.notes) + ["Nothing in the catalogue matched this request."]
+    return result, []
+
+
+REWRITE_PROMPT = (
+    "You are the query-understanding step of a fashion shopping assistant. Fluently understand any "
+    "English, Hindi, Hinglish (Hindi or other Indian languages typed in Roman script), mixed-language text, "
+    "slang, typos and SMS-style spelling, and rewrite the shopper's message as a short, clear English "
+    "search for a fashion catalogue. Translate meaning, not word by word: colours, garments, occasions, "
+    "fabrics, sizes, budgets, audience (men/women/kids) and any filters. Drop filler and generic nouns "
+    "(kapda, kapde, clothes, items, cheez, wala, mujhe, dikhao, chahiye) once their meaning is captured. "
+    "Keep brand names, numbers, prices, sizes and ratings exactly. Garment words with no good English "
+    "equivalent (kurta, saree, lehenga, jutti, dupatta) stay as they are. If the message refers to earlier "
+    "results (it, this, them, iska, inme se, dono me se, which one, the cheapest one), begin the output with "
+    "the tag @prev and a space, then a short English reference like 'which of them is cheaper'; never "
+    "invent product names. If it is a greeting, "
+    "thanks, goodbye or refusal, or already a clear English search, return it unchanged. "
+    "Examples: 'kala kapda' -> 'black'; 'mujhe shaadi ke liye sasta lehenga dikhao' -> 'cheap wedding lehenga'; "
+    "'1500 ke andar mens jeans' -> 'men jeans under 1500'; 'ladkiyon ke liye neeli top' -> 'blue top for women'; "
+    "'inme se kaunsa sabse accha hai' -> '@prev which of them is the best'; 'puma ke shoes 4 star se upar' -> "
+    "'Puma shoes rating above 4'. Output only the query, with no quotes or explanation."
+)
+
+
+def rewrite_query(engine, query, history):
+    """RAG query rewriting: let Gemini understand Hinglish/slang before retrieval."""
+    llm = engine.llm
+    if not llm.available or getattr(llm, "provider", "") != "gemini":
+        return query, False
+    recent = []
+    for message in (history or [])[-4:]:
+        content = str(message.get("content") or "").strip()
+        if message.get("role") in {"user", "assistant"} and content:
+            recent.append(f"{message['role'].title()}: {content[:200]}")
+    prompt = ("Recent conversation:\n" + ("\n".join(recent) or "None") +
+              f"\n\nShopper's message: {query}\n\nEnglish search query:")
+    for attempt in range(2):
+        try:
+            response = llm._get_client().models.generate_content(
+                model=llm.model, contents=prompt,
+                config={"system_instruction": REWRITE_PROMPT, "temperature": 0,
+                        "max_output_tokens": 80, "thinking_config": {"thinking_level": "minimal"}},
+            )
+            text = (response.text or "").strip().splitlines()
+            rewritten = text[0].strip().strip("\"'`") if text else ""
+            refers_previous = rewritten.lower().startswith("@prev")
+            if refers_previous:
+                rewritten = rewritten[5:].strip()
+            if 0 < len(rewritten) <= 200:
+                return rewritten, refers_previous
+        except Exception:
+            logging.exception("Query rewrite attempt %s failed", attempt + 1)
+    return query, False
+
+
+def retrieve_context(engine, query, earlier_messages):
+    """Rewrite (Hinglish -> English), then retrieve. Gemini still answers the original message."""
+    search_query, refers_previous = rewrite_query(engine, query, earlier_messages)
+    result, alternatives = _retrieve_context(engine, search_query, earlier_messages, refers_previous)
+    if search_query.strip().casefold() != query.strip().casefold():
+        result.notes = list(result.notes) + [
+            f"The shopper wrote: '{query}'. It was interpreted as the English catalogue search: '{search_query}'."
+        ]
+    return result, alternatives, search_query
+
+
+def generate_answer(engine, query, result, alternatives, history):
+    """Every reply is written by Gemini from the retrieved context."""
+    grounded = result
+    if not result.products and alternatives:
+        grounded = RetrievalResult(
+            query=query, method=f"{result.method}_alternatives", products=alternatives,
+            total_matches=len(alternatives), filters=result.filters,
+            notes=list(result.notes) + ([result.message] if result.message else []) + [
+                "These are the closest alternatives from the catalogue, not exact matches. "
+                "Say clearly that they are not exact matches."
+            ],
+        )
+    try:
+        return engine.llm.generate(query, grounded, history=history)
+    except Exception as exc:  # never let a Gemini failure crash the chat
+        logging.exception("Gemini generation failed")
+        return SimpleNamespace(source="error", text="", error=str(exc))
+
+
+def response_text(answer):
+    """Show Gemini's answer. If Gemini is unavailable, show a status message, not a fake answer."""
+    if answer is not None and answer.source == "llm" and answer.text:
+        return answer.text
+    detail = (getattr(answer, "error", None) or "no response") if answer is not None else "no response"
+    lowered = detail.lower()
+    if "not configured" in lowered:
+        return "⚠️ Gemini API key is missing. Add GEMINI_API_KEY to `.env` (or Streamlit Secrets) so I can answer."
+    if any(marker in lowered for marker in ("permissiondenied", "unauthorized", "401", "403")):
+        return "⚠️ Gemini rejected the configured API key. Replace GEMINI_API_KEY, then restart the app."
+    return f"⚠️ Gemini could not generate an answer ({detail}). Please try again in a moment."
+
 
 
 def refresh_saved_results(messages, catalog):
@@ -589,12 +786,10 @@ with top_right:
 st.title("👋 Hi, I’m your friendly fashion assistant")
 st.caption("Tell me what you’re looking for. I can find products and share the details available in the Myntra catalogue.")
 if engine.llm.available:
-    st.caption(f"LLM configured · {engine.config.llm_provider.title()} / {engine.config.llm_model}")
+    st.caption(f"RAG pipeline ready · retrieval from catalogue, answers by {engine.config.llm_provider.title()} / {engine.config.llm_model}")
 else:
-    if engine.config.llm_provider == "gemini":
-        st.caption("Catalogue search is ready · Gemini key missing. Set GEMINI_API_KEY in this terminal, then restart Streamlit.")
-    else:
-        st.caption(f"Catalogue search is ready · {engine.config.llm_provider.title()} API key missing. Set its API key in this terminal, then restart Streamlit.")
+    st.warning("Every answer is generated by Gemini from retrieved catalogue records, but no API key is configured. "
+               "Set GEMINI_API_KEY in `.env`, then restart Streamlit.")
 
 example_cols = st.columns(len(EXAMPLES))
 for col, (label, query) in zip(example_cols, EXAMPLES):
@@ -632,121 +827,16 @@ if query:
         st.markdown(query)
 
     with st.chat_message("assistant"):
-        smalltalk = greeting_reply(query)
-        declined = decline_reply(query) if not smalltalk else None
-        suggestions = []
-        answer = None
-        if smalltalk:
-            result = RetrievalResult(query=query, method="smalltalk", message=smalltalk)
-            user_facing = smalltalk
-            displayed_products = []
-        elif declined:
-            result = RetrievalResult(query=query, method="smalltalk", message=declined)
-            user_facing = declined
-            displayed_products = []
-        elif is_general_brand_question(engine, query):
-            # Even broad brand advice must be grounded in actual catalogue rows.
-            # Pick high-rated, reviewed examples as evidence; the system prompt
-            # forbids presenting this sample as an objective brand ranking.
-            best_example_by_brand = {}
-            for product in engine.catalog.records:
-                brand = str(product.get("brand") or "").strip()
-                if not brand:
-                    continue
-                score = (float(product.get("rating") or 0), int(product.get("reviewCount") or 0))
-                current = best_example_by_brand.get(brand)
-                if current is None or score > current[0]:
-                    best_example_by_brand[brand] = (score, product)
-            catalogue_examples = [product for _, product in sorted(
-                best_example_by_brand.values(), key=lambda entry: entry[0], reverse=True
-            )[:15]]
-            result = RetrievalResult(
-                query=query, method="brand_guidance", products=catalogue_examples,
-                total_matches=len(catalogue_examples),
-                notes=["Examples selected from catalogue records with available ratings and review counts; this is not an overall brand ranking."],
-            )
-            earlier_messages = st.session_state["messages"][:-1]
-            answer = engine.llm.generate(query, result, history=earlier_messages)
-            user_facing = response_text(result, answer, query)
-            displayed_products = result.products
-        else:
-            with st.spinner("Finding the best matches…"):
-                earlier_messages = st.session_state["messages"][:-1]
-                previous = previous_products(earlier_messages)
-                budget_context = filter_previous_request_by_budget(
-                    engine, previous_user_query(earlier_messages), query, previous
-                )
-                if budget_context:
-                    result, suggestions, amount = budget_context
-                    if result.products:
-                        answer = engine.llm.generate(query, result, history=earlier_messages)
-                        user_facing = response_text(result, answer, query)
-                        displayed_products = result.products
-                    else:
-                        user_facing = localized(
-                            query,
-                            f"I couldn’t find any products from your previous request within ₹{amount:,.0f}. These are the closest-priced options of the same type; they may be over budget.",
-                            f"आपकी पिछली रिक्वेस्ट के लिए ₹{amount:,.0f} तक का प्रोडक्ट नहीं मिला। ये उसी प्रकार के सबसे कम कीमत वाले विकल्प हैं, जो बजट से ऊपर हो सकते हैं।",
-                            f"Aapki pehli request ke liye ₹{amount:,.0f} ke andar item nahi mila. Ye usi type ke sabse kam daam wale options hain, par budget se zyada ho sakte hain.",
-                        )
-                        displayed_products = []
-                else:
-                    effective_query = query
-                    if previous:
-                        effective_query = combine_filter_refinement(
-                            previous_user_query(earlier_messages), query, engine.catalog.vocab
-                        )
-                    result = engine.retriever.search(effective_query)
-                    translated_query = translate_query(query)
-                    one_product_request = bool(re.search(
-                        r"\b(?:suggest|recommend|show|give|pick)\s+me\s+one\b", query, re.I
-                    ))
-                    contextual_follow_up = (CONTEXTUAL_FOLLOW_UP.search(query)
-                                            or CONTEXTUAL_FOLLOW_UP.search(translated_query))
-                    if previous and contextual_follow_up:
-                        follow_up_products = previous
-                        if re.search(r"\b(?:best|better|recommend|recommendation)\b", query, re.I):
-                            follow_up_products = rank_for_recommendation(previous)
-                        if one_product_request:
-                            follow_up_products = rank_for_recommendation(previous)[:1]
-                        result = RetrievalResult(query=query, method="follow_up", products=follow_up_products,
-                                                 total_matches=len(follow_up_products),
-                                                 notes=["Using products from your previous query for this comparison."])
-                    elif one_product_request:
-                        result = RetrievalResult(query=query, method="clarification")
-                    missing_item_type = requested_missing_item_type(engine, translated_query)
-                    missing_brand = requested_missing_brand(engine, translated_query)
-                    if one_product_request and not previous:
-                        user_facing = "Sure—what type of product would you like me to suggest?"
-                        displayed_products = []
-                        suggestions = []
-                    elif missing_item_type:
-                        result = RetrievalResult(query=query, method="no_match",
-                                                 filters={"articleType": [missing_item_type.title()]})
-                        user_facing = (f"Oops! I couldn’t find catalogue items matching **{missing_item_type}**. "
-                                       "I won’t show unrelated products. Try another product type or change a filter.")
-                        displayed_products = []
-                        suggestions = []
-                    elif missing_brand:
-                        suggestions = result.products[:3] if result.products else find_related_products(engine, result, query)
-                        user_facing = no_match_reply(query, suggestions, missing_brand)
-                        displayed_products = []
-                    elif result.products:
-                        # Generate every product-search reply from retrieved catalogue context.
-                        # The formatter still shows product cards alongside the grounded answer.
-                        answer = engine.llm.generate(query, result, history=earlier_messages)
-                    else:
-                        answer = None
-                    if one_product_request and not previous or missing_item_type or missing_brand:
-                        pass
-                    elif result.products:
-                        user_facing = response_text(result, answer, query)
-                        displayed_products = result.products
-                    else:
-                        suggestions = find_related_products(engine, result, query)
-                        user_facing = no_match_reply(query, suggestions, filters=result.filters)
-                        displayed_products = []
+        earlier_messages = st.session_state["messages"][:-1]
+        with st.spinner("Searching the catalogue and writing an answer…"):
+            result, alternatives, search_query = retrieve_context(engine, query, earlier_messages)
+            answer = generate_answer(engine, query, result, alternatives, earlier_messages)
+        user_facing = response_text(answer)
+        displayed_products = result.products
+        suggestions = [] if displayed_products else alternatives
 
+        if search_query.strip().casefold() != query.strip().casefold():
+            st.caption(f"🔎 Understood as: {search_query}")
         st.markdown(user_facing)
         if displayed_products:
             show_cards(displayed_products, engine, f"new_{len(st.session_state['messages'])}")
@@ -754,7 +844,8 @@ if query:
                 displayed_products, query, f"new_{len(st.session_state['messages'])}", engine.catalog.vocab,
             )
         if suggestions:
-            show_cards(suggestions, engine, f"suggestions_{len(st.session_state['messages'])}")
+            show_cards(suggestions, engine, f"suggestions_{len(st.session_state['messages'])}",
+                       "Similar items you could try")
 
     payload = {"method": result.method, "filters": result.filters, "total_matches": result.total_matches,
                "products": displayed_products, "suggestions": suggestions,
