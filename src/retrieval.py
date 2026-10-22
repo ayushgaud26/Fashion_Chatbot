@@ -111,6 +111,8 @@ class HybridRetriever:
                 query=q, method="no_match",
                 message=f"I couldn't find products with a verified price {'at or below' if ceiling else 'at or above'} {amount:g} {result.products[0].get('currency', 'INR') if result.products else 'INR'} in this result.",
                 total_matches=0,
+                filters=result.filters,
+                unsupported=result.unsupported,
             )
         result.query = q
         result.products = priced

@@ -13,6 +13,13 @@ def test_dense_semantic_retrieval_returns_ranked_ids(engine, records):
     assert [d for _, d in hits] == sorted(d for _, d in hits)
 
 
+def test_price_no_match_keeps_category_filters(retriever):
+    result = retriever.search("Show women's kurtas under 0")
+    assert result.method == "no_match"
+    assert result.filters.get("gender") == ["Women"]
+    assert result.filters.get("subCategory") == ["Kurtas"]
+
+
 def test_empty_query_to_vector_store(engine):
     assert engine.store.query("   ", 5) == []
 
