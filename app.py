@@ -61,6 +61,11 @@ EXAMPLES = [
 ]
 CARD_LIMIT = 10
 THANKS_PATTERN = r"(?:thanks?|thank\s*you+|thank\s*u+|thx+|thnx+|ty)"
+ACKNOWLEDGEMENTS = re.compile(
+    rf"^(?:ok(?:ay)?|alright|all right|got it|understood|sounds good|cool|great|sure)"
+    rf"(?:[,\s]+{THANKS_PATTERN})?[.!?,\s]*$",
+    re.I,
+)
 GREETINGS = re.compile(
     rf"^(?:h+i+|hell+o+|he+y+|hiya+|good morning|good afternoon|good evening|how are(?: you)?|"
     rf"what can you do|who are you|{THANKS_PATTERN})[.!?,\s]*$", re.I,
@@ -86,7 +91,8 @@ NEEDS_LLM_SYNTHESIS = re.compile(
     re.I,
 )
 CONTEXTUAL_FOLLOW_UP = re.compile(
-    r"\b(?:which\s+(?:one|option|product)(?:\s+is)?\s+(?:better|best|more|less)|"
+    r"\b(?:(?:suggest|recommend|show|give|pick)\s+me\s+one|"
+    r"which\s+(?:one|option|product)(?:\s+is)?\s+(?:better|best|more|less)|"
     r"which\s+is\s+(?:better|best)|which\s+(?:better|best)|which\s+one\b|compare\s+(?:them|these|both)|"
     r"between\s+them|what\s+about\s+(?:it|that|them|those)|how\s+much|"
     r"(?:what(?:'s|\s+is\s+)?\s+)?(?:the\s+)?(?:price|cost)\s+(?:of\s+)?(?:it|that|them|those)?|"
@@ -150,6 +156,11 @@ def filter_previous_request_by_budget(engine, previous_query, query, previous=No
     """Apply a budget to the previous cards, previous request, or catalogue if new."""
     amount = budget_amount(query)
     if amount is None:
+        return None
+    # If this message names a product/category, treat it as a fresh constrained
+    # search. Otherwise a prior shirt result could incorrectly satisfy "watch under 1000".
+    current = parse_query(query, engine.catalog.vocab)
+    if current.filters:
         return None
     filters = {}
     if previous:
@@ -287,10 +298,13 @@ def find_related_products(engine, result, query, limit=3):
     filters = dict(result.filters or {})
     category_fields = {"articleType", "subCategory", "masterCategory"}
     # Only relax optional attributes when the query also pins down a product type.
-    # Preserve category, gender, and usage (e.g. Traditional + Men) so alternatives
-    # cannot drift into unrelated items such as underwear.
+    # Preserve product type and audience so alternatives cannot drift into unrelated
+    # items. A style/occasion tag may be relaxed last when the requested type exists
+    # but the catalogue has no products carrying that tag.
     if filters and category_fields.intersection(filters):
         relaxable = ("baseColour", "size", "material", "season", "brand")
+        if filters.get("subCategory") or filters.get("articleType"):
+            relaxable += ("usage",)
         relaxed = set()
         for field in relaxable:
             if field not in filters:
@@ -389,6 +403,13 @@ def greeting_reply(query):
             "ठीक है, मैं यहीं रुकता हूँ। आपका समय देने के लिए धन्यवाद—आपका दिन शुभ हो! 👋",
             "Theek hai, main yahin rukta hoon. Aapke time ke liye dhanyavaad—have a nice day ahead! 👋",
         )
+    if ACKNOWLEDGEMENTS.fullmatch(normalized):
+        return localized(
+            query,
+            "You're welcome! Let me know if you'd like help finding anything else. 👋",
+            "आपका स्वागत है! किसी और चीज़ में मदद चाहिए तो बताइए। 👋",
+            "Aapka welcome! Kuch aur dhoondhne mein help chahiye toh bata dena. 👋",
+        )
     if not GREETINGS.fullmatch(normalized):
         return None
     if re.search(THANKS_PATTERN, normalized, re.I):
@@ -443,6 +464,12 @@ def no_match_reply(query, suggestions, missing_brand=None, filters=None):
         return (f"I couldn’t find **{missing_brand}** in this catalogue, but I can suggest these similar items:"
                 if suggestions else
                 f"I couldn’t find **{missing_brand}** in this catalogue. Try another brand or product type and I’ll look again.")
+    if filters and suggestions and filters.get("usage"):
+        usage = ", ".join(str(value) for value in filters["usage"])
+        item_type = next((str(value) for field in ("subCategory", "articleType")
+                          for value in filters.get(field, [])), "requested product type")
+        return (f"The catalogue has no {usage.lower()}-tagged {item_type.lower()}. "
+                f"Here are {item_type.lower()} from the catalogue; their {usage.lower()} style isn't verified.")
     if filters and suggestions:
         return "Oops! I couldn’t find an exact match for all your filters. Here are other options that keep your requested product type; they may differ on colour, size, material, or brand."
     if filters:
@@ -516,7 +543,10 @@ if "conversation_id" not in st.session_state:
         st.query_params["conversation_id"] = conversation_id
     st.session_state["conversation_id"] = conversation_id
     st.session_state["messages"] = memory.load_messages(conversation_id)
-    refresh_saved_results(st.session_state["messages"], engine.catalog)
+
+# Saved cards may be from an older Arrow catalogue or an earlier deployment.
+# Rehydrate them from the active, price/link-verified catalogue on every rerun.
+refresh_saved_results(st.session_state["messages"], engine.catalog)
 
 top_left, top_right = st.columns([7, 1])
 with top_right:
@@ -621,14 +651,31 @@ if query:
                         )
                     result = engine.retriever.search(effective_query)
                     translated_query = translate_query(query)
-                    if previous and (CONTEXTUAL_FOLLOW_UP.search(query)
-                                     or CONTEXTUAL_FOLLOW_UP.search(translated_query)):
-                        result = RetrievalResult(query=query, method="follow_up", products=previous,
-                                                 total_matches=len(previous),
+                    one_product_request = bool(re.search(
+                        r"\b(?:suggest|recommend|show|give|pick)\s+me\s+one\b", query, re.I
+                    ))
+                    contextual_follow_up = (CONTEXTUAL_FOLLOW_UP.search(query)
+                                            or CONTEXTUAL_FOLLOW_UP.search(translated_query))
+                    if previous and contextual_follow_up:
+                        follow_up_products = previous
+                        if one_product_request:
+                            follow_up_products = [max(previous, key=lambda product: (
+                                float(product.get("rating") or 0),
+                                int(product.get("reviewCount") or 0),
+                                -float(product.get("price") or 0),
+                            ))]
+                        result = RetrievalResult(query=query, method="follow_up", products=follow_up_products,
+                                                 total_matches=len(follow_up_products),
                                                  notes=["Using products from your previous query for this comparison."])
+                    elif one_product_request:
+                        result = RetrievalResult(query=query, method="clarification")
                     missing_item_type = requested_missing_item_type(engine, translated_query)
                     missing_brand = requested_missing_brand(engine, translated_query)
-                    if missing_item_type:
+                    if one_product_request and not previous:
+                        user_facing = "Sure—what type of product would you like me to suggest?"
+                        displayed_products = []
+                        suggestions = []
+                    elif missing_item_type:
                         result = RetrievalResult(query=query, method="no_match",
                                                  filters={"articleType": [missing_item_type.title()]})
                         user_facing = (f"Oops! I couldn’t find catalogue items matching **{missing_item_type}**. "
@@ -645,7 +692,7 @@ if query:
                         answer = engine.llm.generate(query, result, history=earlier_messages)
                     else:
                         answer = None
-                    if missing_item_type or missing_brand:
+                    if one_product_request and not previous or missing_item_type or missing_brand:
                         pass
                     elif result.products:
                         user_facing = response_text(result, answer, query)

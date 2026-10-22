@@ -46,8 +46,9 @@ def load_records(cfg: Config, limit: int | None = None):
     """Load -> validate -> preprocess. Returns (records, report, arrow_table)."""
     if cfg.dataset_path.suffix.lower() == ".csv":
         records, rep, frame = load_myntra_csv(cfg.dataset_path)
-        records, dropped = _keep_priced_records(records)
-        rep.missing_by_field["price"] = rep.missing_by_field.get("price", 0) + dropped
+        records, dropped_price, dropped_link = _keep_shop_ready_records(records)
+        rep.missing_by_field["price"] = rep.missing_by_field.get("price", 0) + dropped_price
+        rep.missing_by_field["productUrl"] = rep.missing_by_field.get("productUrl", 0) + dropped_link
         rep.valid_records = len(records)
         cap = limit or cfg.dev_subset_size
         if cap:
@@ -57,23 +58,32 @@ def load_records(cfg: Config, limit: int | None = None):
     table = load_dataset_table(cfg.dataset_path)
     validate_columns(table.column_names)
     records, rep = preprocess_records(table_to_records(table, limit or cfg.dev_subset_size or None))
-    records, dropped = _keep_priced_records(records)
-    rep.missing_by_field["price"] = rep.missing_by_field.get("price", 0) + dropped
+    records, dropped_price, dropped_link = _keep_shop_ready_records(records)
+    rep.missing_by_field["price"] = rep.missing_by_field.get("price", 0) + dropped_price
+    rep.missing_by_field["productUrl"] = rep.missing_by_field.get("productUrl", 0) + dropped_link
     rep.valid_records = len(records)
     return records, rep, table
 
 
-def _keep_priced_records(records: list[dict]) -> tuple[list[dict], int]:
-    """Exclude products without a finite, non-negative price from the searchable catalogue."""
+def _keep_shop_ready_records(records: list[dict]) -> tuple[list[dict], int, int]:
+    """Exclude products without a usable price or product page from the searchable catalogue."""
     kept = []
+    dropped_price = dropped_link = 0
     for record in records:
         try:
             price = float(record.get("price"))
         except (TypeError, ValueError):
+            dropped_price += 1
             continue
-        if math.isfinite(price) and price >= 0:
-            kept.append(record)
-    return kept, len(records) - len(kept)
+        if not math.isfinite(price) or price < 0:
+            dropped_price += 1
+            continue
+        product_url = str(record.get("productUrl") or "").strip()
+        if not product_url.startswith(("https://", "http://")):
+            dropped_link += 1
+            continue
+        kept.append(record)
+    return kept, dropped_price, dropped_link
 
 
 def export_json(records: list[dict], path: Path) -> str:
