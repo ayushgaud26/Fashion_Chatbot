@@ -144,7 +144,7 @@ def test_gemini_client_configures_bounded_sdk_backoff(monkeypatch):
     client = LLMService("k", model="gemini-3.5-flash-lite", provider="gemini")._get_client()
     retry = captured["http_options"]["retry_options"]
     assert client is not None
-    assert retry["attempts"] == 2
+    assert retry["attempts"] == 3
     assert retry["http_status_codes"] == [408, 429, 500, 502, 503, 504]
 
 

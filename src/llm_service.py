@@ -80,7 +80,7 @@ def unknown_ids_in(text: str, result: RetrievalResult, question: str) -> list[st
 
 class LLMService:
     def __init__(self, api_key: str | None, model: str = "gpt-4o-mini", temperature: float = 0.1,
-                 client=None, max_context_items: int = 8, timeout: float = 14.0,
+                 client=None, max_context_items: int = 8, timeout: float = 9.0,
                  provider: str = "openai"):
         self.api_key, self.model, self.temperature = api_key, model, temperature
         self.provider = provider
@@ -102,8 +102,9 @@ class LLMService:
                     http_options=types.HttpOptions(
                         timeout=int(self.timeout * 1000),
                         retry_options=types.HttpRetryOptions(
-                            # Two total attempts, with a brief exponential backoff.
-                            attempts=2,
+                            # Three total attempts, bounded to keep transient 503s recoverable
+                            # without leaving a user waiting indefinitely.
+                            attempts=3,
                             initial_delay=0.5,
                             max_delay=1.0,
                             exp_base=2.0,
