@@ -77,7 +77,7 @@ def unknown_ids_in(text: str, result: RetrievalResult, question: str) -> list[st
 
 class LLMService:
     def __init__(self, api_key: str | None, model: str = "gpt-4o-mini", temperature: float = 0.1,
-                 client=None, max_context_items: int = 15, timeout: float = 60.0,
+                 client=None, max_context_items: int = 12, timeout: float = 12.0,
                  provider: str = "openai", fallback_model: str | None = None):
         self.api_key, self.model, self.temperature = api_key, model, temperature
         self.provider = provider
@@ -111,11 +111,13 @@ class LLMService:
         if not result.products:
             return LLMAnswer(None, "fallback", error="no products to describe")
         history_lines = []
-        for message in (history or [])[-20:]:
+        # Keep enough turns to resolve follow-ups without sending a long transcript
+        # on every request (which adds latency and can distract the model).
+        for message in (history or [])[-8:]:
             role = message.get("role")
             content = str(message.get("content") or "").strip()
             if role in {"user", "assistant"} and content:
-                history_lines.append(f"{role.title()}: {content[:800]}")
+                history_lines.append(f"{role.title()}: {content[:500]}")
         history_context = "\n".join(history_lines) or "No earlier conversation."
         language_instruction = (
             "Always reply in clear, natural English, regardless of the language used in the question. "
@@ -136,7 +138,7 @@ class LLMService:
         response_model = self.model
         try:
             resp = client.chat.completions.create(
-                model=response_model, temperature=self.temperature, max_tokens=600,
+                model=response_model, temperature=self.temperature, max_tokens=450,
                 messages=messages, **request_options,
             )
         except Exception as exc:  # network, auth, rate limit, malformed response...
@@ -160,7 +162,7 @@ class LLMService:
                 response_model = fallback_model
                 try:
                     resp = client.chat.completions.create(
-                        model=response_model, temperature=self.temperature, max_tokens=600,
+                        model=response_model, temperature=self.temperature, max_tokens=450,
                         messages=messages, **request_options,
                     )
                     break
