@@ -122,6 +122,26 @@ def previous_user_query(messages):
     return ""
 
 
+def rank_for_recommendation(products):
+    """Put catalogue-supported options first for a 'which is best' follow-up."""
+    def score(product):
+        try:
+            rating = float(product.get("rating"))
+        except (TypeError, ValueError):
+            rating = -1.0
+        try:
+            reviews = int(product.get("reviewCount") or 0)
+        except (TypeError, ValueError):
+            reviews = 0
+        try:
+            price = float(product.get("price"))
+        except (TypeError, ValueError):
+            price = float("inf")
+        return rating, reviews, -price
+
+    return sorted(products, key=score, reverse=True)
+
+
 def combine_filter_refinement(previous_query, query, vocab):
     """Carry prior search intent into a clear filter-only follow-up such as 'for men'."""
     previous = parse_query(previous_query, vocab)
@@ -481,7 +501,7 @@ def no_match_reply(query, suggestions, missing_brand=None, filters=None):
 
 def response_text(result, answer, query):
     if answer is not None and answer.source == "llm":
-        return answer.text
+        return f"**🤖 AI-generated answer (grounded in the catalogue):**\n\n{answer.text}"
     if answer is not None and answer.error:
         detail = answer.error
         if "not configured" in detail.lower():
@@ -502,6 +522,9 @@ def response_text(result, answer, query):
                          "कैटलॉग में इस प्रोडक्ट की जानकारी यहाँ है।",
                          "Catalogue mein is product ki details yahan hain.")
     count = result.total_matches or len(result.products)
+    if result.products:
+        return ("I couldn’t generate the AI answer for this request. The product cards below are catalogue matches, "
+                "not an AI recommendation. Please try again in a moment.")
     return localized(
         query,
         f"I found {count} matching items. Here are some options from the catalogue.",
@@ -679,6 +702,8 @@ if query:
                                             or CONTEXTUAL_FOLLOW_UP.search(translated_query))
                     if previous and contextual_follow_up:
                         follow_up_products = previous
+                        if re.search(r"\b(?:best|better|recommend|recommendation)\b", query, re.I):
+                            follow_up_products = rank_for_recommendation(previous)
                         if one_product_request:
                             follow_up_products = [max(previous, key=lambda product: (
                                 float(product.get("rating") or 0),
