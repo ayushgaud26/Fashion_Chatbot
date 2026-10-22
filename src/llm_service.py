@@ -77,7 +77,7 @@ def unknown_ids_in(text: str, result: RetrievalResult, question: str) -> list[st
 
 class LLMService:
     def __init__(self, api_key: str | None, model: str = "gpt-4o-mini", temperature: float = 0.1,
-                 client=None, max_context_items: int = 12, timeout: float = 5.0,
+                 client=None, max_context_items: int = 12, timeout: float = 15.0,
                  provider: str = "openai"):
         self.api_key, self.model, self.temperature = api_key, model, temperature
         self.provider = provider
@@ -141,10 +141,11 @@ class LLMService:
             )
         except Exception as exc:  # network, auth, rate limit, malformed response...
             status = getattr(exc, "status_code", None)
-            transient = status == 429 or (isinstance(status, int) and 500 <= status <= 599)
+            transient = (status == 429 or (isinstance(status, int) and 500 <= status <= 599)
+                         or type(exc).__name__ in {"APITimeoutError", "APIConnectionError"})
             if self.provider == "gemini" and transient:
-                # Retry only the selected model once for a transient capacity error.
-                # SDK retries stay disabled, keeping the total wait bounded.
+                # Retry only the selected model once for a transient service/network
+                # failure. At 15 seconds per attempt this bounds model wait to ~30s.
                 log.warning("Gemini model returned %s; retrying the same model once", status)
                 try:
                     resp = client.chat.completions.create(

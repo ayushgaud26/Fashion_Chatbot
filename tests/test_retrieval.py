@@ -104,6 +104,18 @@ def test_gemini_503_retries_same_model_once(retriever):
     assert answer.source == "llm" and answer.model == "gemini-3.5-flash-lite"
 
 
+def test_gemini_timeout_retries_same_model_once(retriever):
+    res = retriever.search("Show black shirts")
+    timeout_error = type("APITimeoutError", (RuntimeError,), {})("request timed out")
+    client = _Client([timeout_error, "Recovered grounded answer."])
+    answer = LLMService(
+        "k", model="gemini-3.5-flash-lite", provider="gemini", client=client,
+    ).generate("Show black shirts", res)
+    calls = client.chat.completions.calls
+    assert [call["model"] for call in calls] == ["gemini-3.5-flash-lite"] * 2
+    assert answer.source == "llm" and answer.model == "gemini-3.5-flash-lite"
+
+
 def test_gemini_same_model_retry_is_bounded(retriever):
     res = retriever.search("Show black shirts")
     client = _Client([_ServiceUnavailable("high demand"), _ServiceUnavailable("still busy")])
