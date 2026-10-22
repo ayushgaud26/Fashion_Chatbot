@@ -92,7 +92,7 @@ def unknown_ids_in(text: str, result: RetrievalResult, question: str) -> list[st
 
 class LLMService:
     def __init__(self, api_key: str | None, model: str = "gpt-4o-mini", temperature: float = 0.1,
-                 client=None, max_context_items: int = 8, timeout: float = 20.0,
+                 client=None, max_context_items: int = 8, timeout: float = 60.0,
                  provider: str = "openai"):
         self.api_key, self.model, self.temperature = api_key, model, temperature
         self.provider = provider
