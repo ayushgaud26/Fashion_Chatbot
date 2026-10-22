@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 
 from .retrieval import RetrievalResult
@@ -80,7 +81,7 @@ def unknown_ids_in(text: str, result: RetrievalResult, question: str) -> list[st
 
 class LLMService:
     def __init__(self, api_key: str | None, model: str = "gpt-4o-mini", temperature: float = 0.1,
-                 client=None, max_context_items: int = 8, timeout: float = 9.0,
+                 client=None, max_context_items: int = 8, timeout: float = 20.0,
                  provider: str = "openai"):
         self.api_key, self.model, self.temperature = api_key, model, temperature
         self.provider = provider
@@ -102,9 +103,9 @@ class LLMService:
                     http_options=types.HttpOptions(
                         timeout=int(self.timeout * 1000),
                         retry_options=types.HttpRetryOptions(
-                            # Three total attempts, bounded to keep transient 503s recoverable
-                            # without leaving a user waiting indefinitely.
-                            attempts=3,
+                            # Retries are managed below so a transient Gemini 503 does not
+                            # silently fall back after the SDK's short built-in retry window.
+                            attempts=1,
                             initial_delay=0.5,
                             max_delay=1.0,
                             exp_base=2.0,
@@ -121,6 +122,29 @@ class LLMService:
 
     def _redact(self, msg: str) -> str:
         return msg.replace(self.api_key, "***") if self.api_key else msg
+
+    @staticmethod
+    def _status_code(exc: Exception) -> int | None:
+        for value in (getattr(exc, "code", None), getattr(exc, "status_code", None)):
+            if callable(value):
+                try:
+                    value = value()
+                except Exception:
+                    continue
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                match = re.search(r"\b([45]\d\d)\b", str(value or ""))
+                if match:
+                    return int(match.group(1))
+        return None
+
+    @classmethod
+    def _is_transient_gemini_error(cls, exc: Exception) -> bool:
+        if cls._status_code(exc) in {408, 429, 500, 502, 503, 504}:
+            return True
+        name = type(exc).__name__.casefold()
+        return any(token in name for token in ("timeout", "connection", "temporarilyunavailable"))
 
     def generate(self, question: str, result: RetrievalResult, history: list[dict] | None = None) -> LLMAnswer:
         if not self.available:
@@ -148,19 +172,43 @@ class LLMService:
         response_model = self.model
         try:
             client = self._get_client()
-            if self.provider == "gemini":
-                resp = client.models.generate_content(
-                    model=response_model,
-                    contents=user_content,
-                    config={
-                        "system_instruction": system_instruction,
-                        "temperature": self.temperature,
-                        "max_output_tokens": 360,
-                        "thinking_config": {"thinking_level": "minimal"},
-                    },
-                )
-                text = (resp.text or "").strip()
-            else:
+        except Exception as exc:
+            log.exception("Could not initialize LLM client: provider=%s model=%s error=%s",
+                          self.provider, self.model, type(exc).__name__)
+            return LLMAnswer(None, "fallback", error=(
+                f"LLM client initialization failed ({type(exc).__name__}: {self._redact(str(exc))[:160]})"
+            ))
+        if self.provider == "gemini":
+            attempt, delay = 0, 1.0
+            while True:
+                try:
+                    resp = client.models.generate_content(
+                        model=response_model,
+                        contents=user_content,
+                        config={
+                            "system_instruction": system_instruction,
+                            "temperature": self.temperature,
+                            "max_output_tokens": 360,
+                            "thinking_config": {"thinking_level": "minimal"},
+                        },
+                    )
+                    text = (resp.text or "").strip()
+                    break
+                except Exception as exc:
+                    status = self._status_code(exc)
+                    if not self._is_transient_gemini_error(exc):
+                        log.warning("LLM call failed: provider=gemini model=%s status=%s error=%s detail=%s",
+                                    self.model, status, type(exc).__name__, self._redact(str(exc))[:240])
+                        return LLMAnswer(None, "fallback", error=(
+                            f"LLM unavailable ({type(exc).__name__}: {self._redact(str(exc))[:160]})"
+                        ))
+                    attempt += 1
+                    log.warning("Transient Gemini error; waiting and retrying: model=%s status=%s error=%s attempt=%s delay=%.1fs",
+                                self.model, status, type(exc).__name__, attempt, delay)
+                    time.sleep(delay)
+                    delay = min(delay * 2, 15.0)
+        else:
+            try:
                 resp = client.chat.completions.create(
                     model=response_model,
                     temperature=self.temperature,
@@ -171,13 +219,13 @@ class LLMService:
                     ],
                 )
                 text = (resp.choices[0].message.content or "").strip()
-        except Exception as exc:  # network, auth, rate limit, malformed response...
-            status = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-            log.warning("LLM call failed: provider=%s status=%s error=%s",
-                        self.provider, status, type(exc).__name__)
-            return LLMAnswer(None, "fallback", error=(
-                f"LLM unavailable ({type(exc).__name__}: {self._redact(str(exc))[:160]})"
-            ))
+            except Exception as exc:  # network, auth, rate limit, malformed response...
+                status = self._status_code(exc)
+                log.warning("LLM call failed: provider=%s model=%s status=%s error=%s detail=%s",
+                            self.provider, self.model, status, type(exc).__name__, self._redact(str(exc))[:240])
+                return LLMAnswer(None, "fallback", error=(
+                    f"LLM unavailable ({type(exc).__name__}: {self._redact(str(exc))[:160]})"
+                ))
         if not text:
             return LLMAnswer(None, "fallback", error="LLM returned an empty answer")
         bad = unknown_ids_in(text, result, question)

@@ -483,10 +483,13 @@ def response_text(result, answer, query):
     if answer is not None and answer.source == "llm":
         return answer.text
     if answer is not None and answer.error:
-        if result.method == "brand_guidance":
-            return "Here are catalogue examples across brands, with their listed details below."
+        detail = answer.error
+        if "not configured" in detail.lower():
+            return "Gemini API key is missing. Add GEMINI_API_KEY in Streamlit app Secrets to generate an answer."
+        if any(marker in detail.lower() for marker in ("permissiondenied", "unauthorized", "401", "403")):
+            return "Gemini rejected the configured API key. Replace GEMINI_API_KEY in Streamlit app Secrets, then restart the app."
         count = result.total_matches or len(result.products)
-        return f"I found {count} matching products in the catalogue. Here are the results."
+        return f"Gemini could not generate an answer ({detail}). {count} catalogue matches are shown below."
     if result.method == "follow_up":
         return localized(
             query,

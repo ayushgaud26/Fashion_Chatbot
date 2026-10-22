@@ -41,7 +41,9 @@ product name are boosted. Without filters, pure semantic results are capped by `
 and are labelled as suggestions, not verified matches.
 
 **LLM generation** (`llm_service.py`): system prompt forbids invention; temperature 0.1; up to 8 records as JSON context;
-Gemini uses Google's SDK with bounded exponential retries for transient API errors. Errors are caught and API keys redacted;
+Gemini uses Google's SDK and retries transient 408/429/5xx/network failures with capped exponential backoff until the
+same configured model responds. Non-transient configuration/authentication errors are surfaced for correction; no other
+model is selected.
 if the answer mentions an ID outside the retrieved set it is rejected.
 
 **Response formatting & fallback** (`response_formatter.py`): every answer is labelled either *AI-generated* or

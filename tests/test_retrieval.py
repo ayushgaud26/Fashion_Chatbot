@@ -1,6 +1,5 @@
 import dataclasses
 
-from app import response_text
 from src.embeddings import HashingEmbedder
 from src.ingestion import build_index
 from src.llm_service import LLMService
@@ -97,6 +96,10 @@ class _ServiceUnavailable(RuntimeError):
     status_code = 503
 
 
+class _PermissionDenied(RuntimeError):
+    status_code = 403
+
+
 def test_llm_answer_used_and_labelled(retriever):
     res = retriever.search("Show black shirts")
     pid = res.ids[0]
@@ -152,30 +155,35 @@ def test_gemini_client_configures_bounded_sdk_backoff(monkeypatch):
     client = LLMService("k", model="gemini-3.5-flash-lite", provider="gemini")._get_client()
     retry = captured["http_options"]["retry_options"]
     assert client is not None
-    assert retry["attempts"] == 3
+    assert retry["attempts"] == 1
     assert retry["http_status_codes"] == [408, 429, 500, 502, 503, 504]
 
 
 def test_gemini_failure_is_reported_without_switching_models(retriever):
     res = retriever.search("Show black shirts")
-    client = _GeminiClient(_ServiceUnavailable("high demand"))
+    client = _GeminiClient(_PermissionDenied("invalid credentials"))
     answer = LLMService(
         "k", model="gemini-3.5-flash-lite", provider="gemini", client=client,
     ).generate("Show black shirts", res)
     calls = client.models.calls
     assert [call["model"] for call in calls] == ["gemini-3.5-flash-lite"]
-    assert answer.source == "fallback" and "high demand" in answer.error
+    assert answer.source == "fallback" and "invalid credentials" in answer.error
 
 
-def test_llm_failure_uses_neutral_catalogue_copy(retriever):
-    result = retriever.search("Show black shirts")
+def test_gemini_retries_transient_error_until_llm_responds(retriever, monkeypatch):
+    import src.llm_service as llm_service
+
+    res = retriever.search("Show black shirts")
+    client = _GeminiClient([_ServiceUnavailable("high demand"), "Here are matching shirts."])
+    delays = []
+    monkeypatch.setattr(llm_service.time, "sleep", delays.append)
     answer = LLMService(
-        "k", model="gemini-3.5-flash-lite", provider="gemini",
-        client=_GeminiClient(_ServiceUnavailable("high demand")),
-    ).generate("Show black shirts", result)
-    text = response_text(result, answer, "Show black shirts")
-    assert "unavailable" not in text.lower()
-    assert "catalogue" in text.lower()
+        "k", model="gemini-3.5-flash-lite", provider="gemini", client=client,
+    ).generate("Show black shirts", res)
+    assert answer.source == "llm"
+    assert answer.text == "Here are matching shirts."
+    assert len(client.models.calls) == 2
+    assert delays == [1.0]
 
 
 def test_no_api_key_uses_fallback(retriever):
