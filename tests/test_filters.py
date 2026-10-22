@@ -63,6 +63,19 @@ def test_synonyms_only_use_dataset_values(engine):
     assert pq.filters["baseColour"] == ["Grey"] and pq.filters["articleType"] == ["Tshirts"]
 
 
+def test_purse_resolves_only_to_catalogue_wallets(retriever, records):
+    result = retriever.search("purses")
+    expected = [record for record in records if record["subCategory"] == "Wallets"]
+    assert result.products and result.total_matches == len(expected)
+    assert all(product["subCategory"] == "Wallets" for product in result.products)
+
+
+def test_absent_belt_and_handbag_types_remain_unresolved(engine):
+    for query in ("belt", "handbag"):
+        parsed = parse_query(query, engine.catalog.vocab)
+        assert parsed.residual_tokens == [query]
+
+
 def test_semantic_ranking_never_breaks_filters(retriever):
     res = retriever.search("comfortable casual clothing for men")
     assert res.products

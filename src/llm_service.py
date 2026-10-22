@@ -77,7 +77,7 @@ def unknown_ids_in(text: str, result: RetrievalResult, question: str) -> list[st
 
 class LLMService:
     def __init__(self, api_key: str | None, model: str = "gpt-4o-mini", temperature: float = 0.1,
-                 client=None, max_context_items: int = 12, timeout: float = 12.0,
+                 client=None, max_context_items: int = 12, timeout: float = 5.0,
                  provider: str = "openai", fallback_model: str | None = None):
         self.api_key, self.model, self.temperature = api_key, model, temperature
         self.provider = provider
@@ -147,11 +147,8 @@ class LLMService:
             fallback_models = []
             if self.fallback_model and self.fallback_model != self.model:
                 fallback_models.append(self.fallback_model)
-            # Keep a second model in the chain in case the configured alternate
-            # shares the primary model's temporary capacity issue.
-            if self.provider == "gemini" and self.model != "gemini-3.6-flash":
-                if "gemini-3.6-flash" not in fallback_models:
-                    fallback_models.append("gemini-3.6-flash")
+            # One bounded backup attempt keeps transient provider failures from
+            # turning a short request into several serial model timeouts.
             if not (self.provider == "gemini" and fallback_models and transient):
                 log.warning("LLM call failed: %s", type(exc).__name__)
                 return LLMAnswer(None, "fallback", error=f"LLM unavailable ({type(exc).__name__}: {self._redact(str(exc))[:160]})")

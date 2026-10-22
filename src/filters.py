@@ -212,6 +212,9 @@ class Vocabulary:
             ("bag", "subCategory", "bag"), ("cap", "articleType", "cap"),
             ("handbag", "articleType", "handbag"), ("handbag", "subCategory", "handbag"),
             ("handbag", "articleType", "purse"), ("handbag", "subCategory", "purse"),
+            # This catalogue stores purses as Wallets (e.g. fold and zip-around
+            # wallets), so resolve the user term only to those present records.
+            ("purse", "subCategory", "wallet"),
         ):
             keep = [v for v in self.values.get(field_name, [])
                     if fragment in normalize_text(v)]
