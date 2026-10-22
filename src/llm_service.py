@@ -142,22 +142,36 @@ class LLMService:
         except Exception as exc:  # network, auth, rate limit, malformed response...
             status = getattr(exc, "status_code", None)
             transient = status == 429 or (isinstance(status, int) and 500 <= status <= 599)
-            if not (self.provider == "gemini" and self.fallback_model
-                    and self.fallback_model != self.model and transient):
+            fallback_models = []
+            if self.fallback_model and self.fallback_model != self.model:
+                fallback_models.append(self.fallback_model)
+            # Keep a second model in the chain in case the configured alternate
+            # shares the primary model's temporary capacity issue.
+            if self.provider == "gemini" and self.model != "gemini-3.6-flash":
+                if "gemini-3.6-flash" not in fallback_models:
+                    fallback_models.append("gemini-3.6-flash")
+            if not (self.provider == "gemini" and fallback_models and transient):
                 log.warning("LLM call failed: %s", type(exc).__name__)
                 return LLMAnswer(None, "fallback", error=f"LLM unavailable ({type(exc).__name__}: {self._redact(str(exc))[:160]})")
-            log.warning("Primary Gemini model returned %s; retrying with configured fallback model", status)
-            response_model = self.fallback_model
-            try:
-                resp = client.chat.completions.create(
-                    model=response_model, temperature=self.temperature, max_tokens=600,
-                    messages=messages, **request_options,
-                )
-            except Exception as fallback_exc:
-                log.warning("Fallback Gemini model failed: %s", type(fallback_exc).__name__)
+            log.warning("Primary Gemini model returned %s; trying fallback models", status)
+            last_error = exc
+            resp = None
+            for fallback_model in fallback_models:
+                response_model = fallback_model
+                try:
+                    resp = client.chat.completions.create(
+                        model=response_model, temperature=self.temperature, max_tokens=600,
+                        messages=messages, **request_options,
+                    )
+                    break
+                except Exception as fallback_exc:
+                    last_error = fallback_exc
+                    fallback_status = getattr(fallback_exc, "status_code", None)
+                    log.warning("Gemini fallback model %s failed with %s", fallback_model, fallback_status or type(fallback_exc).__name__)
+            if resp is None:
                 return LLMAnswer(None, "fallback", error=(
-                    f"LLM unavailable ({type(fallback_exc).__name__}: "
-                    f"{self._redact(str(fallback_exc))[:160]})"
+                    f"Primary and fallback Gemini models unavailable ({type(last_error).__name__}: "
+                    f"{self._redact(str(last_error))[:160]})"
                 ))
         try:
             text = (resp.choices[0].message.content or "").strip()

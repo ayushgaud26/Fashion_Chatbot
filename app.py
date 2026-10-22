@@ -486,6 +486,9 @@ def response_text(result, answer, query):
         if result.method == "brand_guidance":
             return ("I found catalogue examples across brands. The AI response service is temporarily unavailable, "
                     "so I’m showing those catalogue products directly.")
+        if answer.error.startswith("Primary and fallback Gemini models unavailable"):
+            return ("Gemini’s primary and backup models are unavailable right now. "
+                    "I’m showing the products retrieved from the catalogue below.")
         count = result.total_matches or len(result.products)
         return (f"I found {count} matching products in the catalogue. "
                 "The AI response service is temporarily unavailable, so I’m showing the catalogue results directly.")

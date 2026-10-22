@@ -86,7 +86,8 @@ def get_config() -> Config:
         semantic_max_distance=_float("SEMANTIC_MAX_DISTANCE", 0.8),
         llm_provider=provider,
         llm_model=llm_model,
-        llm_fallback_model=(os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.8-flash").strip() or None)
+        llm_fallback_model=(os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.8-flash").strip()
+                            or "gemini-3.8-flash")
         if provider == "gemini" else None,
         llm_temperature=_float("LLM_TEMPERATURE", 0.1),
         llm_api_key=llm_api_key,
