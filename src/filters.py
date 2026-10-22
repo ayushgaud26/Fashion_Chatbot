@@ -45,6 +45,7 @@ STOPWORDS = set("""show find me i my want a an the for in of to products product
 get looking look need is are there do does you have with and or on suitable category categories what which can could would
 like something whats s that this it be are occasion occasions price pricing cost budget need chahiye dikhao dikhaiye
 color colour how kuch koi kuchh please
+wear
 mujhe mera meri mere ka ki ke ko hai hain ho mein me se aur batao please""".split())
 
 # Normalize common Hindi script and Hinglish terms to the English product vocabulary used by the dataset.
@@ -234,6 +235,11 @@ def parse_query(query: str, vocab: Vocabulary) -> ParsedQuery:
     n, i = len(tokens), 0
     unsupported: list[str] = []
     while i < n:
+        # Articles can also appear as noisy one-letter catalogue values (for
+        # example a material named "A"). They are query grammar, never filters.
+        if tokens[i] in {"a", "an", "the"}:
+            i += 1
+            continue
         matched = False
         for L in range(min(vocab.max_len, n - i), 0, -1):
             key = tuple(stems[i : i + L])

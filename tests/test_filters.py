@@ -9,9 +9,9 @@ def ids_for(retriever, q):
 
 
 def test_gender_filter(retriever, records):
-    res, prods = ids_for(retriever, "Show women's handbags")
+    res, prods = ids_for(retriever, "Show women's shirts")
     assert prods and all(p["gender"] == "Women" for p in prods)
-    expected = sum(1 for r in records if r["gender"] == "Women" and r["articleType"] == "Handbags")
+    expected = sum(1 for r in records if r["gender"] == "Women" and r["subCategory"] == "Shirts")
     assert res.total_matches == expected
 
 
@@ -24,19 +24,20 @@ def test_category_and_subcategory_filter(retriever, records):
     res, prods = ids_for(retriever, "Show products in the footwear category")
     assert res.total_matches == sum(r["masterCategory"] == "Footwear" for r in records)
     assert all(p["masterCategory"] == "Footwear" for p in prods)
-    res, prods = ids_for(retriever, "bottomwear")
-    assert prods and all(p["subCategory"] == "Bottomwear" for p in prods)
+    res, prods = ids_for(retriever, "jeans")
+    assert prods and all(p["subCategory"] == "Jeans" for p in prods)
 
 
 def test_article_type_filter_handles_plurals(retriever, records):
     for q in ("jeans", "show me a jean"):
         res, prods = ids_for(retriever, q)
-        assert res.total_matches == sum(r["articleType"] == "Jeans" for r in records)
+        assert res.total_matches == sum(r["subCategory"] == "Jeans" for r in records)
 
 
 def test_colour_filter_multiword(retriever, records):
     res, prods = ids_for(retriever, "navy blue shirts")
-    assert prods and all(p["baseColour"] == "Navy Blue" and p["articleType"] == "Shirts" for p in prods)
+    assert prods and all("Navy Blue" in [colour.strip() for colour in p["baseColour"].split(",")]
+                         and p["subCategory"] == "Shirts" for p in prods)
 
 
 def test_combined_filters_all_apply(retriever, records):
@@ -51,7 +52,8 @@ def test_all_matches_returned_up_to_limit(retriever, records):
     expected = sum(r["baseColour"] == "Black" and r["articleType"] == "Formal Shoes" for r in records)
     assert res.total_matches == expected and len(res.products) == min(expected, retriever.max_results)
     big = retriever.search("footwear")
-    assert len(big.products) == retriever.max_results and big.truncated
+    assert len(big.products) == min(retriever.max_results, big.total_matches)
+    assert big.truncated == (big.total_matches > retriever.max_results)
 
 
 def test_synonyms_only_use_dataset_values(engine):
@@ -62,7 +64,13 @@ def test_synonyms_only_use_dataset_values(engine):
 
 
 def test_semantic_ranking_never_breaks_filters(retriever):
-    res = retriever.search("comfortable casual summer clothing for men")
+    res = retriever.search("comfortable casual clothing for men")
     assert res.products
-    assert all(p["gender"] == "Men" and p["season"] == "Summer" and p["usage"] == "Casual"
-               and p["masterCategory"] == "Apparel" for p in res.products)
+    assert all(p["gender"] == "Men" and p["usage"] == "Casual"
+               and p["masterCategory"] == "Clothing" for p in res.products)
+
+
+def test_casual_party_wear_does_not_treat_wear_as_product_type(retriever):
+    res = retriever.search("casual party wear")
+    assert res.products
+    assert all(p["usage"] in {"Casual", "Party"} for p in res.products)

@@ -1,5 +1,6 @@
 import pytest
 
+from src.data_loader import ImageStore
 from src.preprocessing import (EXPECTED_COLUMNS, DatasetValidationError, build_search_text, preprocess_records,
                                validate_columns)
 
@@ -46,6 +47,9 @@ def test_original_ids_and_values_preserved(loaded):
     assert records[0]["productDisplayName"] == table.column("productDisplayName")[0].as_py()
 
 
-def test_images_are_real_bytes(engine, records):
-    assert engine.images.get_bytes(records[0]["id"]) is not None
-    assert engine.images.get_bytes(-1) is None
+def test_images_are_real_bytes(loaded):
+    table = loaded[2]
+    store = ImageStore(table)
+    first_id = table.column("id")[0].as_py()
+    assert store.get_bytes(first_id) is not None
+    assert store.get_bytes(-1) is None

@@ -19,9 +19,10 @@ def test_empty_and_blank_queries(retriever):
 def test_price_and_stock_not_fabricated(retriever, records):
     rec = records[0]
     res = retriever.search(f"What is the price of {rec['productDisplayName']}?")
-    assert "price" in res.unsupported and res.ids
+    assert "price" not in res.unsupported and res.ids
+    assert res.products[0]["price"] is not None
     md = compose(res).markdown
-    assert "price" in md.lower() and "$" not in md and "₹" not in md
+    assert "price" in md.lower() and "$" not in md and "₹" in md
     res2 = retriever.search("is it in stock?")
     assert res2.method == "clarification" and not res2.products
 

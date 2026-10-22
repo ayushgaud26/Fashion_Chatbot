@@ -483,8 +483,12 @@ def response_text(result, answer, query):
     if answer is not None and answer.source == "llm":
         return answer.text
     if answer is not None and answer.error:
-        return (f"⚠️ Gemini couldn’t generate an answer ({answer.error}). "
-                "I’m showing the matching catalogue products below.")
+        if result.method == "brand_guidance":
+            return ("I found catalogue examples across brands. The AI response service is temporarily unavailable, "
+                    "so I’m showing those catalogue products directly.")
+        count = result.total_matches or len(result.products)
+        return (f"I found {count} matching products in the catalogue. "
+                "The AI response service is temporarily unavailable, so I’m showing the catalogue results directly.")
     if result.method == "follow_up":
         return localized(
             query,
@@ -614,14 +618,30 @@ if query:
             user_facing = declined
             displayed_products = []
         elif is_general_brand_question(engine, query):
-            result = RetrievalResult(query=query, method="brand_guidance")
-            user_facing = localized(
-                query,
-                "There isn’t one best brand for everyone, and this catalogue doesn’t rank brands overall. Tell me what you’re shopping for, your budget, and what matters most (such as style, comfort, or ratings), and I’ll suggest and compare options available here.",
-                "हर किसी के लिए एक ही सबसे अच्छा ब्रांड नहीं होता, और इस कैटलॉग में ब्रांड्स की कुल रैंकिंग उपलब्ध नहीं है। आप क्या खरीदना चाहते हैं, बजट और अपनी प्राथमिकता (जैसे स्टाइल, आराम या रेटिंग) बताइए—मैं यहाँ उपलब्ध विकल्प सुझाकर उनकी तुलना करूँगा।",
-                "Har kisi ke liye ek hi best brand nahi hota, aur is catalogue mein brands ki overall ranking nahi hai. Aap kya lena chahte ho, budget kya hai, aur priority (style, comfort ya rating) kya hai—batao, main available options suggest karke compare kar dunga.",
+            # Even broad brand advice must be grounded in actual catalogue rows.
+            # Pick high-rated, reviewed examples as evidence; the system prompt
+            # forbids presenting this sample as an objective brand ranking.
+            best_example_by_brand = {}
+            for product in engine.catalog.records:
+                brand = str(product.get("brand") or "").strip()
+                if not brand:
+                    continue
+                score = (float(product.get("rating") or 0), int(product.get("reviewCount") or 0))
+                current = best_example_by_brand.get(brand)
+                if current is None or score > current[0]:
+                    best_example_by_brand[brand] = (score, product)
+            catalogue_examples = [product for _, product in sorted(
+                best_example_by_brand.values(), key=lambda entry: entry[0], reverse=True
+            )[:15]]
+            result = RetrievalResult(
+                query=query, method="brand_guidance", products=catalogue_examples,
+                total_matches=len(catalogue_examples),
+                notes=["Examples selected from catalogue records with available ratings and review counts; this is not an overall brand ranking."],
             )
-            displayed_products = []
+            earlier_messages = st.session_state["messages"][:-1]
+            answer = engine.llm.generate(query, result, history=earlier_messages)
+            user_facing = response_text(result, answer, query)
+            displayed_products = result.products
         else:
             with st.spinner("Finding the best matches…"):
                 earlier_messages = st.session_state["messages"][:-1]
