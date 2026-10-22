@@ -1,0 +1,4 @@
+[server]
+# Transformers lazily imports optional vision modules; Streamlit's file watcher
+# introspects those modules and floods Cloud logs with irrelevant import traces.
+fileWatcherType = "none"

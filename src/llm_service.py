@@ -91,11 +91,12 @@ class LLMService:
     def _get_client(self):
         if self._client is None:
             from openai import OpenAI
-            options = {"api_key": self.api_key, "timeout": self.timeout}
+            # Keep retries under our control for every provider. The OpenAI SDK's
+            # default retries can silently add multiple timeout windows before
+            # generate() gets a chance to apply its bounded same-model retry.
+            options = {"api_key": self.api_key, "timeout": self.timeout, "max_retries": 0}
             if self.provider == "gemini":
                 options["base_url"] = "https://generativelanguage.googleapis.com/v1beta/openai/"
-                # Use only the configured Gemini model; SDK retries add latency.
-                options["max_retries"] = 0
             self._client = OpenAI(**options)
         return self._client
 
