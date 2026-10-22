@@ -137,7 +137,10 @@ def rank_for_recommendation(products):
             price = float(product.get("price"))
         except (TypeError, ValueError):
             price = float("inf")
-        return rating, reviews, -price
+        # Smooth tiny review samples toward a neutral 4/5 prior so a 4.7 rating
+        # from 15 reviews does not automatically outrank a well-reviewed 4.3.
+        supported_rating = ((rating * reviews) + (4.0 * 100)) / (reviews + 100) if rating >= 0 else -1
+        return supported_rating, reviews, -price
 
     return sorted(products, key=score, reverse=True)
 
@@ -705,11 +708,7 @@ if query:
                         if re.search(r"\b(?:best|better|recommend|recommendation)\b", query, re.I):
                             follow_up_products = rank_for_recommendation(previous)
                         if one_product_request:
-                            follow_up_products = [max(previous, key=lambda product: (
-                                float(product.get("rating") or 0),
-                                int(product.get("reviewCount") or 0),
-                                -float(product.get("price") or 0),
-                            ))]
+                            follow_up_products = rank_for_recommendation(previous)[:1]
                         result = RetrievalResult(query=query, method="follow_up", products=follow_up_products,
                                                  total_matches=len(follow_up_products),
                                                  notes=["Using products from your previous query for this comparison."])
