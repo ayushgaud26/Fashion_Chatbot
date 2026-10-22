@@ -77,7 +77,7 @@ def unknown_ids_in(text: str, result: RetrievalResult, question: str) -> list[st
 
 class LLMService:
     def __init__(self, api_key: str | None, model: str = "gpt-4o-mini", temperature: float = 0.1,
-                 client=None, max_context_items: int = 12, timeout: float = 10.0,
+                 client=None, max_context_items: int = 12, timeout: float = 5.0,
                  provider: str = "openai"):
         self.api_key, self.model, self.temperature = api_key, model, temperature
         self.provider = provider
@@ -140,8 +140,26 @@ class LLMService:
                 messages=messages, **request_options,
             )
         except Exception as exc:  # network, auth, rate limit, malformed response...
-            log.warning("LLM call failed: %s", type(exc).__name__)
-            return LLMAnswer(None, "fallback", error=f"LLM unavailable ({type(exc).__name__}: {self._redact(str(exc))[:160]})")
+            status = getattr(exc, "status_code", None)
+            transient = status == 429 or (isinstance(status, int) and 500 <= status <= 599)
+            if self.provider == "gemini" and transient:
+                # Retry only the selected model once for a transient capacity error.
+                # SDK retries stay disabled, keeping the total wait bounded.
+                log.warning("Gemini model returned %s; retrying the same model once", status)
+                try:
+                    resp = client.chat.completions.create(
+                        model=response_model, temperature=self.temperature, max_tokens=450,
+                        messages=messages, **request_options,
+                    )
+                except Exception as retry_exc:
+                    log.warning("Gemini same-model retry failed: %s", type(retry_exc).__name__)
+                    return LLMAnswer(None, "fallback", error=(
+                        f"LLM unavailable after same-model retry ({type(retry_exc).__name__}: "
+                        f"{self._redact(str(retry_exc))[:160]})"
+                    ))
+            else:
+                log.warning("LLM call failed: %s", type(exc).__name__)
+                return LLMAnswer(None, "fallback", error=f"LLM unavailable ({type(exc).__name__}: {self._redact(str(exc))[:160]})")
         try:
             text = (resp.choices[0].message.content or "").strip()
         except Exception as exc:  # network, auth, rate limit, malformed response...

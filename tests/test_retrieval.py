@@ -92,16 +92,27 @@ def test_llm_api_failure_falls_back(retriever):
     assert all(str(i) in out.markdown for i in res.ids[:10])
 
 
-def test_gemini_503_does_not_switch_models(retriever):
+def test_gemini_503_retries_same_model_once(retriever):
     res = retriever.search("Show black shirts")
-    client = _Client(_ServiceUnavailable("high demand"))
+    client = _Client([_ServiceUnavailable("high demand"), "Recovered grounded answer."])
     answer = LLMService(
         "k", model="gemini-3.5-flash-lite", provider="gemini",
         client=client,
     ).generate("Show black shirts", res)
     calls = client.chat.completions.calls
-    assert [call["model"] for call in calls] == ["gemini-3.5-flash-lite"]
-    assert answer.source == "fallback" and "LLM unavailable" in answer.error
+    assert [call["model"] for call in calls] == ["gemini-3.5-flash-lite"] * 2
+    assert answer.source == "llm" and answer.model == "gemini-3.5-flash-lite"
+
+
+def test_gemini_same_model_retry_is_bounded(retriever):
+    res = retriever.search("Show black shirts")
+    client = _Client([_ServiceUnavailable("high demand"), _ServiceUnavailable("still busy")])
+    answer = LLMService(
+        "k", model="gemini-3.5-flash-lite", provider="gemini", client=client,
+    ).generate("Show black shirts", res)
+    calls = client.chat.completions.calls
+    assert [call["model"] for call in calls] == ["gemini-3.5-flash-lite"] * 2
+    assert answer.source == "fallback" and "after same-model retry" in answer.error
 
 
 def test_no_api_key_uses_fallback(retriever):
