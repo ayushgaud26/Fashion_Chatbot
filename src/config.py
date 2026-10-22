@@ -52,18 +52,11 @@ class Config:
 
 
 def get_config() -> Config:
-    provider = os.getenv("LLM_PROVIDER", "auto").strip().lower()
-    if provider == "auto":
-        provider = "openai" if os.getenv("OPENAI_API_KEY") else "gemini"
-    if provider not in {"openai", "gemini"}:
-        raise ValueError("LLM_PROVIDER must be 'auto', 'openai' or 'gemini'.")
-    if provider == "openai":
-        llm_api_key = os.getenv("OPENAI_API_KEY") or None
-        llm_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    else:
-        llm_api_key = os.getenv("GEMINI_API_KEY") or None
-        # Keep Gemini generation on the single model chosen for this app.
-        llm_model = "gemini-3.5-flash-lite"
+    # This assistant uses Gemini only. Other provider keys/settings must never
+    # silently route a product answer through a different model.
+    provider = "gemini"
+    llm_api_key = os.getenv("GEMINI_API_KEY") or None
+    llm_model = "gemini-3.5-flash-lite"
     dataset_path = _path("DATASET_PATH", "data/myntra/myntra-dataset-sample-main/Myntra products .csv")
     preferred_csv = PROJECT_ROOT / "data" / "myntra" / "myntra-dataset-sample-main" / "Myntra products .csv"
     # The Arrow sample has blurry thumbnails and lacks prices/review counts. If a
